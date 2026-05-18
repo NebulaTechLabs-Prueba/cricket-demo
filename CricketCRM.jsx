@@ -8,11 +8,12 @@ import {
  Stamp, Filter, UserPlus, Mail, Phone, MapPin, MessageCircle, Syringe,
  CalendarDays, BadgeCheck, BookOpen, Printer, Share2, QrCode,
  History, UserMinus, ShoppingBag, Trash2, GripVertical, Minus, Maximize2, Minimize2,
- LogIn, LogOut, Lock, Eye, EyeOff, User, TrendingUp, ExternalLink, ChevronDown, Zap, Info,
+ LogIn, LogOut, Lock, Eye, EyeOff, User, TrendingUp, ExternalLink, ChevronDown, ChevronUp, Zap, Info,
+ RotateCcw, List,
  DollarSign, FlaskConical, Truck, Receipt, Wallet, Coins, Banknote, CreditCard, ArrowRightLeft, Smartphone,
  Shield, Award, ArrowRight, Menu, Instagram, Facebook, Send, Camera, Edit3, Box,
  PlayCircle, Activity, UserCheck, CircleDollarSign, CalendarPlus, CalendarCheck, CalendarClock,
- Briefcase, CheckCircle2
+ Briefcase, CheckCircle2, Layers, Archive, Boxes, Barcode, TrendingDown, Table
 } from "lucide-react";
 
 // ========== HOOK: detección de viewport móvil ==========
@@ -177,34 +178,112 @@ const ACCOUNTS = [
     role: "super",
     roleLabel: "Super usuario",
     initials: "DR",
+    sedeIds: [], // Super ve todas las sedes
   },
   {
     email: "vet@cricket.vet",
     password: "vet123",
     name: "Dr. Henríquez",
     role: "vet",
-    roleLabel: "Veterinario",
+    roleLabel: "Veterinario · Pet 1",
     initials: "DH",
+    sedeIds: ["sede-pet1"],
   },
   {
     email: "grooming@cricket.vet",
     password: "groom123",
     name: "Sandra Lara",
     role: "grooming",
-    roleLabel: "Groomer",
+    roleLabel: "Groomer · Pet 1",
     initials: "SL",
+    sedeIds: ["sede-pet1"],
   },
   {
     email: "ventas@cricket.vet",
     password: "ventas123",
     name: "Carlos Méndez",
     role: "sales",
-    roleLabel: "Ventas",
+    roleLabel: "Ventas · Pet 1",
     initials: "CM",
+    sedeIds: ["sede-pet1"],
+  },
+  // === Cuentas de prueba para Sede 2 (Pet 2) ===
+  // Útiles para validar el flujo multi-sede: estos usuarios solo deberían
+  // ver clientes, mensajes y módulos de Pet 2.
+  {
+    email: "vet2@cricket.vet",
+    password: "vet123",
+    name: "Dr. Salazar",
+    role: "vet",
+    roleLabel: "Veterinario · Pet 2",
+    initials: "DS",
+    sedeIds: ["sede-pet2"],
+  },
+  {
+    email: "ventas2@cricket.vet",
+    password: "ventas123",
+    name: "Lucía Vargas",
+    role: "sales",
+    roleLabel: "Ventas · Pet 2",
+    initials: "LV",
+    sedeIds: ["sede-pet2"],
+  },
+  // Usuario temporal de ejemplo: una suplente de veterinaria que tiene acceso por 5 días
+  {
+    email: "suplente@cricket.vet",
+    password: "supl123",
+    name: "Dra. Camila Ortiz",
+    role: "vet",
+    roleLabel: "Veterinario · Suplencia",
+    initials: "CO",
+    sedeIds: ["sede-pet1"],
+    temporary: {
+      // Expira en 5 días desde ahora
+      expiresAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
+      reason: "Suplencia de Dra. Romero durante vacaciones (3-12 mayo)",
+      grantedAt: new Date().toISOString(),
+    },
   },
 ];
 
-// Mapa de permisos: cada rol tiene una lista de "claves" que puede usar.
+// ===========================================================================
+// TÍTULOS PROFESIONALES
+// ===========================================================================
+// Lista de títulos que un usuario puede anteponer a su nombre. El `value` es
+// el prefijo corto que se muestra (ej. en el saludo del dashboard); el `label`
+// agrega el descriptor para el selector. value === "" significa "sin título".
+const USER_TITLES = [
+  { value: "",       label: "Sin título" },
+  { value: "Dr.",    label: "Dr. — Doctor" },
+  { value: "Dra.",   label: "Dra. — Doctora" },
+  { value: "Lic.",   label: "Lic. — Licenciado" },
+  { value: "Lcda.",  label: "Lcda. — Licenciada" },
+  { value: "Ing.",   label: "Ing. — Ingeniero/a" },
+  { value: "T.S.U.", label: "T.S.U. — Técnico Superior Universitario" },
+  { value: "Prof.",  label: "Prof. — Profesor/a" },
+];
+// Set de prefijos conocidos (incluye variantes sin punto) para poder detectar
+// y separar un título que venga embebido al inicio de un nombre.
+const KNOWN_TITLE_PREFIXES = [
+  "Dr.", "Dra.", "Lic.", "Lcda.", "Licda.", "Ing.", "T.S.U.", "TSU",
+  "Prof.", "Dr", "Dra", "Lic", "Ing",
+];
+// Separa un nombre en { title, baseName }. Si el nombre empieza con un título
+// conocido (ej. "Dra. Romero"), lo extrae; si no, title queda vacío.
+function splitNameTitle(fullName) {
+  const parts = (fullName || "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length > 1 && KNOWN_TITLE_PREFIXES.includes(parts[0])) {
+    // Normalizamos al value canónico de USER_TITLES cuando sea posible
+    const raw = parts[0];
+    const canonical = USER_TITLES.find(t =>
+      t.value && (t.value === raw || t.value.replace(/\./g, "") === raw.replace(/\./g, ""))
+    );
+    return { title: canonical ? canonical.value : raw, baseName: parts.slice(1).join(" ") };
+  }
+  return { title: "", baseName: (fullName || "").trim() };
+}
+
+
 // Las claves son las mismas que aparecen en `view` y los grupos de la sidebar.
 // Este es el mapa POR DEFECTO. El super usuario puede modificarlo en /roles.
 // ===========================================================================
@@ -242,14 +321,16 @@ const CRM_FIELD_SCHEMA = {
           { id: "treatment", label: "Tratamiento",        editable: true, defaultLevel: "edit" },
           { id: "supplies",  label: "Insumos médicos",    editable: true, defaultLevel: "edit" },
           { id: "history",   label: "Consultas anteriores", editable: false, defaultLevel: "view" },
+          { id: "edit-pet",  label: "Editar datos de la mascota (drawer)", editable: true, defaultLevel: "edit" },
         ],
       },
       billing: {
-        label: "Facturación",
-        description: "Factura asociada a la consulta.",
+        label: "Recibos",
+        description: "Recibo asociada a la consulta.",
         fields: [
-          { id: "invoice",      label: "Ver factura",       editable: false, defaultLevel: "view" },
-          { id: "invoice-edit", label: "Editar items factura", editable: true, defaultLevel: "view" },
+          { id: "invoice",      label: "Ver recibo",       editable: false, defaultLevel: "view" },
+          { id: "invoice-edit", label: "Editar items recibo", editable: true, defaultLevel: "view" },
+          { id: "send-invoice", label: "Enviar recibo por chat", editable: true, defaultLevel: "edit" },
         ],
       },
       passport: {
@@ -259,6 +340,9 @@ const CRM_FIELD_SCHEMA = {
           { id: "deworming",    label: "Desparasitaciones",  editable: true, defaultLevel: "edit" },
           { id: "vaccination",  label: "Vacunaciones",       editable: true, defaultLevel: "edit" },
           { id: "consultation", label: "Consultas clínicas", editable: true, defaultLevel: "edit" },
+          { id: "edit-ficha",   label: "Editar ficha clínica completa", editable: true, defaultLevel: "edit" },
+          { id: "edit-events",  label: "Crear/editar/eliminar eventos del historial", editable: true, defaultLevel: "edit" },
+          { id: "physical",     label: "Mediciones físicas (peso, altura)", editable: true, defaultLevel: "edit" },
         ],
       },
       // Nota: la sección "messaging" (chat con el tutor) se configura en el CRM "Clientes"
@@ -279,7 +363,9 @@ const CRM_FIELD_SCHEMA = {
           { id: "notes",      label: "Notas internas",  editable: true,  defaultLevel: "edit" },
           { id: "photos",     label: "Fotos antes/después", editable: true, defaultLevel: "edit" },
           { id: "advance",    label: "Avanzar etapa",    editable: true,  defaultLevel: "edit" },
-          { id: "finish",     label: "Cerrar y facturar", editable: true,  defaultLevel: "edit" },
+          { id: "finish",     label: "Cerrar y cobrar", editable: true,  defaultLevel: "edit" },
+          { id: "send-invoice", label: "Enviar recibo por chat", editable: true, defaultLevel: "edit" },
+          { id: "edit-pet",   label: "Editar datos de la mascota (drawer)", editable: true, defaultLevel: "edit" },
         ],
       },
       // Nota: la sección "messaging" (chat con el tutor) se configura en el CRM "Clientes"
@@ -308,6 +394,8 @@ const CRM_FIELD_SCHEMA = {
           { id: "amount",     label: "Monto estimado",  editable: true, defaultLevel: "edit" },
           { id: "probability", label: "Probabilidad",   editable: true, defaultLevel: "edit" },
           { id: "close-date",  label: "Fecha estimada cierre", editable: true, defaultLevel: "edit" },
+          { id: "create-card", label: "Crear nuevo registro", editable: true, defaultLevel: "edit" },
+          { id: "delete-card", label: "Eliminar registro", editable: true, defaultLevel: "view" },
         ],
       },
       activity: {
@@ -316,6 +404,40 @@ const CRM_FIELD_SCHEMA = {
         fields: [
           { id: "notes",  label: "Notas",  editable: true, defaultLevel: "edit" },
           { id: "tasks",  label: "Tareas", editable: true, defaultLevel: "edit" },
+        ],
+      },
+    },
+  },
+  sales: {
+    label: "Ventas (Recibos)",
+    sections: {
+      invoices: {
+        label: "Recibos",
+        description: "Operación de venta y cobro: crear, editar, cobrar.",
+        fields: [
+          { id: "view",         label: "Ver recibos",               editable: false, defaultLevel: "view" },
+          { id: "create",       label: "Crear nuevo recibo",        editable: true,  defaultLevel: "edit" },
+          { id: "edit-items",   label: "Editar items de recibo",    editable: true,  defaultLevel: "edit" },
+          { id: "apply-payment", label: "Aplicar pagos",            editable: true,  defaultLevel: "edit" },
+          { id: "delete",       label: "Eliminar recibo",            editable: true,  defaultLevel: "view" },
+          { id: "history",      label: "Ver histórico",             editable: false, defaultLevel: "view" },
+        ],
+      },
+      delivery: {
+        label: "Delivery",
+        description: "Tracking de envío y entrega de pedidos.",
+        fields: [
+          { id: "view",    label: "Ver estado de delivery", editable: false, defaultLevel: "view" },
+          { id: "update",  label: "Actualizar etapa",      editable: true,  defaultLevel: "edit" },
+        ],
+      },
+      payment_methods: {
+        label: "Métodos de pago",
+        description: "Acceso a la configuración global de métodos de cobro.",
+        fields: [
+          { id: "view",   label: "Ver métodos configurados",  editable: false, defaultLevel: "view" },
+          { id: "config", label: "Configurar métodos (admin)", editable: true, defaultLevel: "hidden" },
+          { id: "send",   label: "Enviar datos de pago por chat", editable: true, defaultLevel: "edit" },
         ],
       },
     },
@@ -334,6 +456,7 @@ const CRM_FIELD_SCHEMA = {
           { id: "address",  label: "Dirección",     editable: true,  defaultLevel: "view" },
           { id: "segment",  label: "Segmento (Premium/Frecuente)", editable: false, defaultLevel: "view" },
           { id: "spending", label: "Histórico de gasto",           editable: false, defaultLevel: "view" },
+          { id: "delete",   label: "Eliminar cliente",             editable: true,  defaultLevel: "hidden" },
         ],
       },
       pets: {
@@ -348,16 +471,17 @@ const CRM_FIELD_SCHEMA = {
           { id: "weight",    label: "Peso",            editable: true,  defaultLevel: "view" },
           { id: "color",     label: "Color",           editable: true,  defaultLevel: "view" },
           { id: "microchip", label: "Microchip (sensible)", editable: true, defaultLevel: "view" },
+          { id: "create",    label: "Agregar mascota",  editable: true, defaultLevel: "edit" },
         ],
       },
       billing: {
-        label: "Facturación del cliente",
-        description: "Facturas, deuda y planes de pago del tutor.",
+        label: "Recibos del cliente",
+        description: "Recibos, deuda y planes de pago del tutor.",
         fields: [
-          { id: "invoices", label: "Ver facturas",    editable: false, defaultLevel: "view" },
+          { id: "invoices", label: "Ver recibos",    editable: false, defaultLevel: "view" },
           { id: "balance",  label: "Saldo pendiente", editable: false, defaultLevel: "view" },
           { id: "plans",    label: "Planes de pago",  editable: false, defaultLevel: "view" },
-          { id: "create",   label: "Crear nueva factura", editable: true, defaultLevel: "view" },
+          { id: "create",   label: "Crear nueva recibo", editable: true, defaultLevel: "view" },
         ],
       },
       messaging: {
@@ -366,6 +490,8 @@ const CRM_FIELD_SCHEMA = {
         fields: [
           { id: "chat-read",  label: "Leer mensajes",   editable: false, defaultLevel: "view" },
           { id: "chat-write", label: "Enviar mensajes", editable: true,  defaultLevel: "edit" },
+          { id: "msg-config", label: "Configurar plantillas de mensaje", editable: true, defaultLevel: "hidden" },
+          { id: "send-files", label: "Adjuntar fotos / recibos / datos de pago", editable: true, defaultLevel: "edit" },
         ],
       },
     },
@@ -394,6 +520,65 @@ const CRM_FIELD_SCHEMA = {
           { id: "delete-event",  label: "Eliminar evento",         editable: true,  defaultLevel: "view" },
           { id: "assign-staff",  label: "Asignar veterinario/groomer", editable: true, defaultLevel: "view" },
           { id: "reminders",     label: "Crear recordatorios",     editable: true,  defaultLevel: "view" },
+          { id: "approve-web",   label: "Aprobar citas pedidas por web", editable: true, defaultLevel: "hidden" },
+        ],
+      },
+    },
+  },
+  inventory: {
+    label: "Inventario",
+    sections: {
+      stock: {
+        label: "Stock de productos e insumos",
+        description: "Acceso al inventario por SKU, sede y módulo.",
+        fields: [
+          { id: "view",        label: "Ver stock",                editable: false, defaultLevel: "view" },
+          { id: "adjust",      label: "Ajustar stock (entradas/salidas)", editable: true, defaultLevel: "view" },
+          { id: "create-sku",  label: "Crear nuevo SKU",          editable: true,  defaultLevel: "hidden" },
+          { id: "delete-sku",  label: "Eliminar SKU",             editable: true,  defaultLevel: "hidden" },
+          { id: "view-cost",   label: "Ver costo del producto",   editable: false, defaultLevel: "hidden" },
+        ],
+      },
+      catalogs: {
+        label: "Catálogos veterinaria/grooming",
+        description: "Servicios y precios visibles al construir recibos.",
+        fields: [
+          { id: "view",   label: "Ver catálogos",      editable: false, defaultLevel: "view" },
+          { id: "edit",   label: "Editar servicios / precios", editable: true, defaultLevel: "hidden" },
+        ],
+      },
+    },
+  },
+  config: {
+    label: "Configuración del sistema",
+    sections: {
+      modules: {
+        label: "Ajuste de CRM",
+        description: "Crear sedes, módulos CRM, configurar columnas y campos.",
+        fields: [
+          { id: "view-manager", label: "Ver el ajuste de CRM",          editable: false, defaultLevel: "hidden" },
+          { id: "create-module", label: "Crear nuevo módulo CRM",        editable: true,  defaultLevel: "hidden" },
+          { id: "edit-module",   label: "Configurar módulo (features, columnas)", editable: true, defaultLevel: "hidden" },
+          { id: "remove-module", label: "Eliminar módulo",              editable: true,  defaultLevel: "hidden" },
+          { id: "manage-sedes",  label: "Crear/editar sedes",           editable: true,  defaultLevel: "hidden" },
+        ],
+      },
+      roles: {
+        label: "Roles y permisos",
+        description: "Gestión de roles, permisos por campo y usuarios.",
+        fields: [
+          { id: "view",         label: "Ver roles y permisos",    editable: false, defaultLevel: "hidden" },
+          { id: "edit-role",    label: "Editar permisos de rol",  editable: true,  defaultLevel: "hidden" },
+          { id: "create-role",  label: "Crear nuevo rol",          editable: true,  defaultLevel: "hidden" },
+          { id: "manage-users", label: "Gestionar usuarios",       editable: true,  defaultLevel: "hidden" },
+        ],
+      },
+      analytics: {
+        label: "Analíticas",
+        description: "Dashboards de operación, finanzas y desempeño.",
+        fields: [
+          { id: "view",      label: "Ver analíticas",          editable: false, defaultLevel: "hidden" },
+          { id: "export",    label: "Exportar reportes",       editable: true,  defaultLevel: "hidden" },
         ],
       },
     },
@@ -407,9 +592,44 @@ const ROLE_CRM_DEFAULTS = {
   super: () => "edit",  // super edita todo
   vet: (crmId, sectionId, field) => {
     if (crmId === "vet") return field.defaultLevel;
+    // Veterinaria no participa en grooming ni en el CRM B2B (Mayoristas):
+    // esos CRMs quedan completamente ocultos para el rol "vet" y, por herencia,
+    // para cualquier rol custom que herede de "vet". Sin esto, los campos de B2B
+    // caían al `field.defaultLevel` (view/edit) y el rol quedaba con B2B asignado
+    // sin haberlo seleccionado.
+    if (crmId === "grooming") return "hidden";
+    if (crmId === "standard") return "hidden";
+    if (crmId === "sales") {
+      // El vet ve recibos de su consulta pero no maneja toda la caja: solo crea/edita
+      // recibos para sus consultas. No accede a config de métodos de pago.
+      if (sectionId === "invoices") {
+        if (field.id === "view")          return "view";
+        if (field.id === "create")        return "edit";
+        if (field.id === "edit-items")    return "edit";
+        if (field.id === "apply-payment") return "hidden";
+        if (field.id === "delete")        return "hidden";
+        if (field.id === "history")       return "view";
+      }
+      if (sectionId === "delivery")        return "hidden";
+      if (sectionId === "payment_methods") return field.id === "view" ? "view" : "hidden";
+      return field.defaultLevel;
+    }
+    if (crmId === "inventory") {
+      // El vet ve stock y catálogos para construir recibos, pero no ajusta ni crea SKUs.
+      if (sectionId === "stock") {
+        if (field.id === "view")       return "view";
+        if (field.id === "adjust")     return "hidden";
+        if (field.id === "create-sku") return "hidden";
+        if (field.id === "delete-sku") return "hidden";
+        if (field.id === "view-cost")  return "hidden";
+      }
+      if (sectionId === "catalogs") return field.id === "view" ? "view" : "hidden";
+      return field.defaultLevel;
+    }
+    if (crmId === "config") return "hidden"; // vet no configura el sistema
     if (crmId === "clients") {
       // Vet en Clientes: NO ve datos del tutor pero SÍ ve mascotas
-      if (sectionId === "tutor")     return "hidden";
+      if (sectionId === "tutor")     return field.id === "delete" ? "hidden" : "hidden";
       if (sectionId === "billing")   return "hidden";
       if (sectionId === "messaging") return "hidden";
       return field.defaultLevel;
@@ -431,6 +651,7 @@ const ROLE_CRM_DEFAULTS = {
         if (field.id === "delete-event") return "hidden";
         if (field.id === "assign-staff") return "view";
         if (field.id === "reminders")    return "edit";
+        if (field.id === "approve-web")  return "hidden";
       }
       return field.defaultLevel;
     }
@@ -438,16 +659,46 @@ const ROLE_CRM_DEFAULTS = {
   },
   grooming: (crmId, sectionId, field) => {
     if (crmId === "grooming") return field.defaultLevel;
+    // Grooming no participa en el CRM B2B (Mayoristas): queda oculto. Igual que
+    // en "vet", sin esta regla los campos de B2B caían a su defaultLevel y el
+    // rol terminaba con B2B visible sin pedirlo.
+    if (crmId === "standard") return "hidden";
     if (crmId === "vet") {
       if (sectionId === "clinical") return "hidden";
       if (sectionId === "billing")  return "hidden";
       if (sectionId === "passport") return "hidden"; // historia clínica no es área de grooming
       return field.defaultLevel;
     }
+    if (crmId === "sales") {
+      // Groomer ve y crea recibos de sus servicios pero no maneja caja completa.
+      if (sectionId === "invoices") {
+        if (field.id === "view")          return "view";
+        if (field.id === "create")        return "edit";
+        if (field.id === "edit-items")    return "edit";
+        if (field.id === "apply-payment") return "hidden";
+        if (field.id === "delete")        return "hidden";
+        if (field.id === "history")       return "view";
+      }
+      if (sectionId === "delivery")        return "hidden";
+      if (sectionId === "payment_methods") return field.id === "view" ? "view" : "hidden";
+      return field.defaultLevel;
+    }
+    if (crmId === "inventory") {
+      if (sectionId === "stock") {
+        if (field.id === "view")       return "view";
+        if (field.id === "adjust")     return "edit"; // groomer ajusta consumo de insumos
+        if (field.id === "create-sku") return "hidden";
+        if (field.id === "delete-sku") return "hidden";
+        if (field.id === "view-cost")  return "hidden";
+      }
+      if (sectionId === "catalogs") return field.id === "view" ? "view" : "hidden";
+      return field.defaultLevel;
+    }
+    if (crmId === "config") return "hidden";
     if (crmId === "clients") {
       if (sectionId === "tutor")     return field.id === "name" ? "view" : "hidden";
       if (sectionId === "billing")   return "hidden";
-      if (sectionId === "messaging") return field.defaultLevel;
+      if (sectionId === "messaging") return field.id === "msg-config" ? "hidden" : field.defaultLevel;
       if (sectionId === "pets")      return field.id === "microchip" ? "hidden" : field.defaultLevel;
       return field.defaultLevel;
     }
@@ -468,15 +719,48 @@ const ROLE_CRM_DEFAULTS = {
         if (field.id === "delete-event") return "hidden";
         if (field.id === "assign-staff") return "hidden";
         if (field.id === "reminders")    return "edit";
+        if (field.id === "approve-web")  return "hidden";
       }
       return field.defaultLevel;
     }
     return field.defaultLevel;
   },
   sales: (crmId, sectionId, field) => {
-    if (sectionId === "clinical") return "hidden";
-    if (sectionId === "passport") return "view"; // sales puede ver historia, no editarla
+    // Ventas no participa en la operación clínica ni de grooming. Del CRM de
+    // veterinaria solo conserva lectura de la historia (passport) como
+    // referencia comercial; el resto del CRM vet y todo el CRM grooming quedan
+    // ocultos. El CRM B2B ("standard") SÍ es su área, así que cae a defaultLevel.
+    if (crmId === "vet") {
+      if (sectionId === "passport") return field.id === "edit-events" || field.id === "edit-ficha" || field.id === "physical" ? "hidden" : "view";
+      return "hidden";
+    }
+    if (crmId === "grooming") return "hidden";
+    if (crmId === "sales") {
+      // Sales es el dueño del módulo Ventas → todo en edit por defecto,
+      // excepto la config admin de métodos de pago (la deja a super).
+      if (sectionId === "payment_methods") {
+        if (field.id === "view")   return "view";
+        if (field.id === "config") return "hidden";
+        if (field.id === "send")   return "edit";
+      }
+      return field.defaultLevel === "hidden" ? "view" : field.defaultLevel;
+    }
+    if (crmId === "inventory") {
+      // Sales: ve stock para construir recibos, ajusta cuando se vende producto.
+      if (sectionId === "stock") {
+        if (field.id === "view")       return "view";
+        if (field.id === "adjust")     return "edit";
+        if (field.id === "create-sku") return "hidden";
+        if (field.id === "delete-sku") return "hidden";
+        if (field.id === "view-cost")  return "view";
+      }
+      if (sectionId === "catalogs") return field.id === "view" ? "view" : "hidden";
+      return field.defaultLevel;
+    }
+    if (crmId === "config") return "hidden";
     if (crmId === "clients") {
+      // Sales en Clientes: editable porque cobra y atiende.
+      if (field.id === "delete") return "hidden";
       return field.editable ? "edit" : "view";
     }
     if (crmId === "agenda") {
@@ -495,6 +779,7 @@ const ROLE_CRM_DEFAULTS = {
         if (field.id === "delete-event") return "view";
         if (field.id === "assign-staff") return "view";
         if (field.id === "reminders")    return "edit";
+        if (field.id === "approve-web")  return "edit"; // sales aprueba citas web
       }
       return field.defaultLevel;
     }
@@ -561,7 +846,7 @@ const ALL_VIEWS = [
   { id: "messages",  label: "Mensajes",  group: "General" },
   { id: "passport",  label: "Pasaportes",group: "General" },
   { id: "crm",       label: "CRM (hub)",   group: "CRM" },
-  { id: "manager",   label: "Catálogo de módulos", group: "CRM" },
+  { id: "manager",   label: "Catálogo de CRMs", group: "CRM" },
   { id: "vet",       label: "Veterinaria", group: "CRM" },
   { id: "vet-passport", label: "Pasaporte clínico", group: "CRM" },
   { id: "vet-catalog", label: "Catálogo Veterinaria", group: "Ajustes" },
@@ -573,15 +858,37 @@ const ALL_VIEWS = [
   { id: "inventory", label: "Inventario", group: "Ajustes" },
   { id: "clients",   label: "Clientes",  group: "Operación" },
   { id: "products",  label: "Productos (Ajustes)",  group: "Ajustes" },
+  { id: "inventory-mgmt", label: "Inventario",       group: "Ajustes" },
   { id: "client-settings", label: "Ajuste de clientes",  group: "Ajustes" },
   { id: "agenda-settings", label: "Ajuste de agenda",   group: "Ajustes" },
+  { id: "payment-methods", label: "Métodos de pago",   group: "Ajustes" },
+  { id: "analytics",       label: "Analíticas",          group: "Ajustes" },
   { id: "users",           label: "Usuarios",            group: "Ajustes" },
 ];
 
-const canAccess = (perm, viewId) => {
+// === canAccess: valida si un rol puede ver una vista ===
+// Tercer parámetro opcional: `modules` (registro global). Si el `viewId` no está
+// en los permisos directos pero corresponde a un módulo, se valida por su `kind`.
+// Esto permite que el rol "vet" tenga permisos para "vet" y automáticamente
+// también acceda a "vet-pet2", "vet-pet3" o cualquier otro módulo de kind="vet".
+// La separación por sede se hace por user.sedeIds en otra capa.
+const canAccess = (perm, viewId, modules = null) => {
   if (!perm) return false;
   if (perm.views === "*") return true;
-  return perm.views.includes(viewId);
+  // Match directo: el viewId está explícito en los permisos
+  if (perm.views.includes(viewId)) return true;
+  // Match por kind: si viewId es un módulo, resolvemos su kind y vemos si el rol
+  // tiene acceso a CUALQUIER vista que represente ese kind base.
+  if (modules) {
+    const m = modules.find(mod => mod.id === viewId);
+    if (m) {
+      // El "id base" del kind: "vet" se mapea a "vet", "grooming" a "grooming-ops", etc.
+      const kindToBaseId = { vet: "vet", grooming: "grooming-ops", standard: "standard" };
+      const baseId = kindToBaseId[m.kind] || m.kind;
+      if (perm.views.includes(baseId)) return true;
+    }
+  }
+  return false;
 };
 
 const ANIMAL_TYPES = [
@@ -594,12 +901,18 @@ const ANIMAL_TYPES = [
 ];
 
 const VET_PATIENTS = [
+ // === Pacientes de Veterinaria Pet 1 (moduleId: "vet") ===
  { id: 1, code: "435761", name: "Toby", species: "dog", breed: "Labrador", age: "4 años", owner: "María Pérez", lastVisit: "Hace 3 días", status: "tratamiento", moduleId: "vet" },
  { id: 2, code: "307283", name: "Luna", species: "cat", breed: "Siamés", age: "2 años", owner: "Carlos R.", lastVisit: "Hoy", status: "consulta", moduleId: "vet" },
  { id: 3, code: "871522", name: "Rocky", species: "dog", breed: "Bulldog", age: "6 años", owner: "Ana García", lastVisit: "Hace 1 semana", status: "control", moduleId: "vet" },
  { id: 4, code: "743044", name: "Coco", species: "bird", breed: "Cacatúa", age: "8 años", owner: "Luis M.", lastVisit: "Hace 2 días", status: "consulta", moduleId: "vet" },
  { id: 5, code: "178805", name: "Mishi", species: "cat", breed: "Persa", age: "5 años", owner: "Elena V.", lastVisit: "Hace 12 días", status: "vacuna", moduleId: "vet" },
  { id: 6, code: "614566", name: "Pelusa", species: "rabbit", breed: "Holland Lop", age: "1 año", owner: "Jorge T.", lastVisit: "Hace 4 días", status: "control", moduleId: "vet" },
+ // === Pacientes de Veterinaria Pet 2 (moduleId: "vet-pet2") ===
+ { id: 7, code: "521893", name: "Max", species: "dog", breed: "Golden Retriever", age: "3 años", owner: "Sofía Méndez", lastVisit: "Ayer", status: "consulta", moduleId: "vet-pet2" },
+ { id: 8, code: "904712", name: "Nala", species: "cat", breed: "Mestiza", age: "1 año", owner: "Roberto Pinto", lastVisit: "Hace 5 días", status: "vacuna", moduleId: "vet-pet2" },
+ { id: 9, code: "667321", name: "Bruno", species: "dog", breed: "Beagle", age: "5 años", owner: "Patricia Lugo", lastVisit: "Hace 2 días", status: "tratamiento", moduleId: "vet-pet2" },
+ { id: 10, code: "455098", name: "Pancho", species: "dog", breed: "Poodle", age: "7 años", owner: "Andrés Ríos", lastVisit: "Hoy", status: "control", moduleId: "vet-pet2" },
 ];
 
 const DIAGNOSIS_RULES = [
@@ -806,21 +1119,21 @@ const PRODUCT_CATALOG = [
 
 // Catálogo de medicamentos
 const MEDICINE_CATALOG = [
-  { id: "m-001", name: "Bravecto Plus 250mg", price: 42, presentation: "Comprimido masticable", indication: "Antiparasitario externo + interno" },
-  { id: "m-002", name: "Frontline Combo", price: 22, presentation: "Pipeta única", indication: "Antiparasitario externo" },
-  { id: "m-003", name: "NexGard Spectra", price: 28, presentation: "Comprimido", indication: "Antiparasitario interno + externo" },
-  { id: "m-004", name: "Otomax", price: 18, presentation: "Suspensión ótica 14g", indication: "Otitis bacteriana" },
-  { id: "m-005", name: "Apoquel 16mg", price: 35, presentation: "Comprimidos x14", indication: "Dermatitis alérgica" },
-  { id: "m-006", name: "Cerenia 16mg", price: 12, presentation: "Comprimidos x4", indication: "Antiemético" },
-  { id: "m-007", name: "Synulox 250mg", price: 22, presentation: "Comprimidos x10", indication: "Antibiótico amoxicilina" },
-  { id: "m-008", name: "Meloxicam 1.5mg/ml", price: 18, presentation: "Suspensión oral 32ml", indication: "Antiinflamatorio" },
-  { id: "m-009", name: "Drontal Plus", price: 14, presentation: "Comprimidos x2", indication: "Desparasitante interno" },
-  { id: "m-010", name: "Vacuna polivalente DHPPi", price: 28, presentation: "Dosis", indication: "Inmunización canina anual" },
-  { id: "m-011", name: "Vacuna antirrábica", price: 18, presentation: "Dosis", indication: "Inmunización antirrábica anual" },
+  { id: "m-001", name: "Bravecto Plus 250mg", price: 42, presentation: "Comprimido masticable", indication: "Antiparasitario externo + interno", requiresRecipe: false },
+  { id: "m-002", name: "Frontline Combo", price: 22, presentation: "Pipeta única", indication: "Antiparasitario externo", requiresRecipe: false },
+  { id: "m-003", name: "NexGard Spectra", price: 28, presentation: "Comprimido", indication: "Antiparasitario interno + externo", requiresRecipe: false },
+  { id: "m-004", name: "Otomax", price: 18, presentation: "Suspensión ótica 14g", indication: "Otitis bacteriana", requiresRecipe: true },
+  { id: "m-005", name: "Apoquel 16mg", price: 35, presentation: "Comprimidos x14", indication: "Dermatitis alérgica", requiresRecipe: true },
+  { id: "m-006", name: "Cerenia 16mg", price: 12, presentation: "Comprimidos x4", indication: "Antiemético", requiresRecipe: true },
+  { id: "m-007", name: "Synulox 250mg", price: 22, presentation: "Comprimidos x10", indication: "Antibiótico amoxicilina", requiresRecipe: true },
+  { id: "m-008", name: "Meloxicam 1.5mg/ml", price: 18, presentation: "Suspensión oral 32ml", indication: "Antiinflamatorio", requiresRecipe: true },
+  { id: "m-009", name: "Drontal Plus", price: 14, presentation: "Comprimidos x2", indication: "Desparasitante interno", requiresRecipe: false },
+  { id: "m-010", name: "Vacuna polivalente DHPPi", price: 28, presentation: "Dosis", indication: "Inmunización canina anual", requiresRecipe: false },
+  { id: "m-011", name: "Vacuna antirrábica", price: 18, presentation: "Dosis", indication: "Inmunización antirrábica anual", requiresRecipe: false },
 ];
 
 // Catálogo de insumos de grooming. Cada uno tiene un precio interno
-// que NO es visible al rol grooming — solo se usa al facturar.
+// que NO es visible al rol grooming — solo se usa al cobrar.
 const GROOMING_SUPPLIES = [
   { id: "gs-001", name: "Champú hipoalergénico", unit: "ml",     defaultQty: 50,  price: 4,  category: "Higiene" },
   { id: "gs-002", name: "Champú antipulgas",     unit: "ml",     defaultQty: 50,  price: 6,  category: "Higiene" },
@@ -1093,7 +1406,7 @@ const ANIMAL_ICONS = { dog: Dog, cat: Cat, bird: Bird, rabbit: Rabbit, rodent: R
 // Esto permite que un cliente tenga muchas mascotas sin duplicar datos clínicos.
 const CLIENTS_DATA = [
   {
-    id: "cli-001", name: "María Pérez", cedula: "V-12.345.678",
+    id: "cli-001", sedeOrigenId: "sede-pet1", name: "María Pérez", cedula: "V-12.345.678",
     phone: "0414-1234567", email: "maria.perez@gmail.com",
     address: "Av. Las Mercedes, Caracas",
     since: "Abr 2020", segment: "Premium",
@@ -1101,7 +1414,7 @@ const CLIENTS_DATA = [
     petCodes: [generatePetCode(1)], // Toby
   },
   {
-    id: "cli-002", name: "Ana García", cedula: "V-15.998.221",
+    id: "cli-002", sedeOrigenId: "sede-pet1", name: "Ana García", cedula: "V-15.998.221",
     phone: "0414-5556677", email: "ana.garcia@hotmail.com",
     address: "Urb. La Castellana, Caracas",
     since: "Jun 2019", segment: "Frecuente",
@@ -1109,7 +1422,7 @@ const CLIENTS_DATA = [
     petCodes: [generatePetCode(2)], // Rocky
   },
   {
-    id: "cli-003", name: "Carlos Ramírez", cedula: "V-18.776.554",
+    id: "cli-003", sedeOrigenId: "sede-pet1", name: "Carlos Ramírez", cedula: "V-18.776.554",
     phone: "0414-2223344", email: "c.ramirez@gmail.com",
     address: "El Cafetal, Caracas",
     since: "Feb 2024", segment: "Nuevo",
@@ -1117,7 +1430,7 @@ const CLIENTS_DATA = [
     petCodes: [generatePetCode(3)], // Luna
   },
   {
-    id: "cli-004", name: "Luis Mendoza", cedula: "V-9.554.221",
+    id: "cli-004", sedeOrigenId: "sede-pet1", name: "Luis Mendoza", cedula: "V-9.554.221",
     phone: "0416-1112233", email: "lmendoza@gmail.com",
     address: "Los Palos Grandes, Caracas",
     since: "May 2018", segment: "Premium",
@@ -1126,7 +1439,7 @@ const CLIENTS_DATA = [
   },
   // === CLIENTE CON MUCHAS MASCOTAS (rescatista / criadora) ===
   {
-    id: "cli-005", name: "Fundación Patitas Felices", cedula: "J-40.998.221-3",
+    id: "cli-005", sedeOrigenId: "sede-pet1", name: "Fundación Patitas Felices", cedula: "J-40.998.221-3",
     phone: "0212-555-1234", email: "info@patitasfelices.org",
     address: "Quinta Esperanza, El Hatillo",
     since: "Ene 2018", segment: "Institucional",
@@ -1144,7 +1457,7 @@ const CLIENTS_DATA = [
     ],
   },
   {
-    id: "cli-006", name: "Elena Velásquez", cedula: "V-14.112.667",
+    id: "cli-006", sedeOrigenId: "sede-pet1", name: "Elena Velásquez", cedula: "V-14.112.667",
     phone: "0414-3344556", email: "elena.v@gmail.com",
     address: "Santa Mónica, Caracas",
     since: "Jun 2021", segment: "Frecuente",
@@ -1152,7 +1465,7 @@ const CLIENTS_DATA = [
     petCodes: [generatePetCode(5)], // Mishi
   },
   {
-    id: "cli-007", name: "Jorge Torres", cedula: "V-16.554.998",
+    id: "cli-007", sedeOrigenId: "sede-pet1", name: "Jorge Torres", cedula: "V-16.554.998",
     phone: "0412-5566778", email: "j.torres@outlook.com",
     address: "La California Norte, Caracas",
     since: "Mar 2025", segment: "Nuevo",
@@ -1160,7 +1473,7 @@ const CLIENTS_DATA = [
     petCodes: [generatePetCode(6)], // Pelusa
   },
   {
-    id: "cli-008", name: "Roberto Silva", cedula: "V-11.223.445",
+    id: "cli-008", sedeOrigenId: "sede-pet1", name: "Roberto Silva", cedula: "V-11.223.445",
     phone: "0414-7788990", email: "r.silva@gmail.com",
     address: "Lomas del Ávila, Caracas",
     since: "Oct 2018", segment: "Premium",
@@ -1168,7 +1481,7 @@ const CLIENTS_DATA = [
     petCodes: [generatePetCode(7), generatePetCode(120), generatePetCode(121)],
   },
   {
-    id: "cli-009", name: "Lucía Hernández", cedula: "V-19.443.221",
+    id: "cli-009", sedeOrigenId: "sede-pet2", name: "Lucía Hernández", cedula: "V-19.443.221",
     phone: "0414-2233445", email: "l.hernandez@gmail.com",
     address: "Sebucán, Caracas",
     since: "Dic 2022", segment: "Frecuente",
@@ -1176,7 +1489,7 @@ const CLIENTS_DATA = [
     petCodes: [generatePetCode(8)], // Nala
   },
   {
-    id: "cli-010", name: "Verónica Castro", cedula: "V-17.998.443",
+    id: "cli-010", sedeOrigenId: "sede-pet2", name: "Verónica Castro", cedula: "V-17.998.443",
     phone: "0414-4455667", email: "v.castro@gmail.com",
     address: "Chuao, Caracas",
     since: "Ago 2023", segment: "Nuevo",
@@ -1184,7 +1497,7 @@ const CLIENTS_DATA = [
     petCodes: [generatePetCode(9)], // Bruno
   },
   {
-    id: "cli-011", name: "Fernando Ruiz", cedula: "V-13.665.998",
+    id: "cli-011", sedeOrigenId: "sede-pet2", name: "Fernando Ruiz", cedula: "V-13.665.998",
     phone: "0414-9988776", email: "f.ruiz@gmail.com",
     address: "Los Naranjos, Caracas",
     since: "May 2021", segment: "Premium",
@@ -1192,7 +1505,7 @@ const CLIENTS_DATA = [
     petCodes: [generatePetCode(10)], // Kira
   },
   {
-    id: "cli-012", name: "Patricia Gómez", cedula: "V-15.778.443",
+    id: "cli-012", sedeOrigenId: "sede-pet2", name: "Patricia Gómez", cedula: "V-15.778.443",
     phone: "0414-6677889", email: "p.gomez@gmail.com",
     address: "Macaracuay, Caracas",
     since: "Abr 2020", segment: "Frecuente",
@@ -1201,7 +1514,7 @@ const CLIENTS_DATA = [
   },
   // === Clientes Express (registro rápido sin mascotas) ===
   {
-    id: "cli-013", name: "Roberto Salazar", cedula: "V-19.443.221",
+    id: "cli-013", sedeOrigenId: "sede-pet2", name: "Roberto Salazar", cedula: "V-19.443.221",
     phone: "0414-3322110", email: null,
     address: "El Cafetal, Caracas",
     since: "Abr 2026", segment: "Express",
@@ -1211,7 +1524,7 @@ const CLIENTS_DATA = [
     debt: 0, isOrg: false,
   },
   {
-    id: "cli-014", name: "Carmen Linares", cedula: "V-22.110.554",
+    id: "cli-014", sedeOrigenId: "sede-pet2", name: "Carmen Linares", cedula: "V-22.110.554",
     phone: "0426-1198844", email: "carmen.l@gmail.com",
     address: "La Trinidad, Caracas",
     since: "Mar 2026", segment: "Express",
@@ -1225,12 +1538,119 @@ const CLIENTS_DATA = [
 // === HISTORIAL POR CATEGORÍAS ===
 // Cada categoría tiene su color e icono. Los registros se asocian a un cliente
 // y opcionalmente a una mascota (por code).
+// === Defaults estándar por kind de módulo ===
+// Garantiza que cualquier módulo nuevo (vet/grooming/standard) creado desde
+// cero o al levantar una nueva sede arranca con la MISMA configuración de
+// features y cardFields que el módulo seed de Pet 1. Así una clínica nueva
+// tiene exactamente la misma funcionalidad de día 1.
+function getModuleDefaults(kind) {
+  if (kind === "vet") {
+    return {
+      features: {
+        speciesFilters: true, followUp: true, agendaSidebar: true,
+        walkIns: true, medicationSuggester: true, clinicalHistory: true,
+        suppliesDuringService: false, beforeAfterPhotos: false, floatingCalendar: false,
+        chatWithTutor: true, invoiceLink: true, dragAndDrop: true,
+      },
+      cardFields: {
+        petName: true, petCode: true, breed: true, age: true,
+        tutorName: true, time: true, invoiceNumber: true, statusBadge: true,
+      },
+      columns: [
+        { id: "reserva-hoy",   label: "Reserva hoy" },
+        { id: "en-consulta",   label: "En consulta" },
+        { id: "tratamiento",   label: "Tratamiento en sede" },
+        { id: "control",       label: "Control / Vacunación" },
+        { id: "finalizado",    label: "Finalizado" },
+      ],
+      tone: "from-orange-100 to-orange-50 text-orange-800",
+      accent: "from-orange-500 to-orange-700",
+      icon: "Stethoscope",
+      role: "Veterinario",
+      description: "Sugeridor inteligente de medicinas por diagnóstico, fichas clínicas con iconos por especie.",
+      meta: ["Diagnóstico → tratamiento", "Historia clínica", "Recetario digital"],
+    };
+  }
+  if (kind === "grooming") {
+    return {
+      features: {
+        speciesFilters: false, followUp: false, agendaSidebar: false,
+        walkIns: false, medicationSuggester: false, clinicalHistory: false,
+        suppliesDuringService: true, beforeAfterPhotos: true, floatingCalendar: true,
+        chatWithTutor: true, invoiceLink: true, dragAndDrop: true,
+      },
+      cardFields: {
+        petName: true, petCode: false, breed: true, age: false,
+        tutorName: true, time: true, invoiceNumber: true, statusBadge: false,
+      },
+      columns: [
+        { id: "pending", label: "Por hacer" },
+        { id: "active",  label: "En proceso" },
+        { id: "done",    label: "Terminado" },
+      ],
+      tone: "from-emerald-100 to-emerald-50 text-emerald-800",
+      accent: "from-emerald-500 to-emerald-700",
+      icon: "Bath",
+      role: "Groomer",
+      description: "Catálogo visual de servicios, agenda de baños y cortes, registro fotográfico antes/después.",
+      meta: ["Catálogo de servicios", "Agenda diaria", "Fotos antes/después"],
+    };
+  }
+  if (kind === "standard") {
+    return {
+      features: {
+        speciesFilters: false, followUp: false, agendaSidebar: false,
+        walkIns: false, medicationSuggester: false, clinicalHistory: false,
+        suppliesDuringService: false, beforeAfterPhotos: false, floatingCalendar: false,
+        chatWithTutor: true, invoiceLink: true, dragAndDrop: true,
+      },
+      cardFields: {
+        petName: false, petCode: false, breed: false, age: false,
+        tutorName: true, time: false, invoiceNumber: true, statusBadge: true,
+      },
+      columns: [
+        { id: "prospecto",  label: "Prospecto" },
+        { id: "contactado", label: "Contactado" },
+        { id: "propuesta",  label: "Propuesta enviada" },
+        { id: "cerrado",    label: "Cerrado" },
+      ],
+      tone: "from-blue-100 to-blue-50 text-blue-800",
+      accent: "from-blue-500 to-blue-700",
+      icon: "Tag",
+      role: "Vendedor B2B",
+      description: "Pipeline genérico configurado como CRM estándar con campos personalizados y embudo de ventas.",
+      meta: ["Embudo prospecto → cierre", "Campos personalizados", "Reglas de paso"],
+    };
+  }
+  // custom: minimal but functional
+  return {
+    features: {
+      speciesFilters: false, followUp: false, agendaSidebar: false,
+      walkIns: false, medicationSuggester: false, clinicalHistory: false,
+      suppliesDuringService: false, beforeAfterPhotos: false, floatingCalendar: false,
+      chatWithTutor: true, invoiceLink: true, dragAndDrop: true,
+    },
+    cardFields: {
+      petName: false, petCode: false, breed: false, age: false,
+      tutorName: true, time: false, invoiceNumber: true, statusBadge: true,
+    },
+    columns: [
+      { id: "col1", label: "Por hacer" },
+      { id: "col2", label: "En proceso" },
+      { id: "col3", label: "Hecho" },
+    ],
+    tone: "from-stone-100 to-stone-50 text-stone-800",
+    accent: "from-stone-500 to-stone-700",
+    icon: "LayoutGrid",
+    role: "Operador",
+    description: "CRM personalizado con columnas y campos a medida.",
+    meta: [],
+  };
+}
+
 const HISTORY_CATEGORIES = {
-  caja:        { label: "Caja",                color: "emerald", Icon: Receipt,       desc: "Facturas y desglose" },
-  laboratorio: { label: "Laboratorio",         color: "blue",    Icon: FlaskConical,  desc: "Exámenes y procesos" },
+  caja:        { label: "Caja",                color: "emerald", Icon: Receipt,       desc: "Recibos y desglose" },
   veterinaria: { label: "Veterinaria",         color: "orange",  Icon: Stethoscope,   desc: "Citas próximas y pasadas" },
-  farmacia:    { label: "Farmacia",            color: "purple",  Icon: Pill,          desc: "Recipes y dispensación" },
-  externos:    { label: "Otros servicios",     color: "stone",   Icon: Truck,         desc: "Servicios variados" },
 };
 
 const COLOR_CLASSES = {
@@ -1257,7 +1677,7 @@ const PROCESS_BADGE_CLASSES = {
 };
 
 // Mock generator: cada categoría con su shape específico
-const buildClientHistory = (client) => {
+const buildClientHistory = (client, allInvoices = []) => {
   // Solo los clientes pre-existentes del seed tienen historia mock.
   // Clientes recién creados (id "c-{timestamp}") NO tienen historia.
   // En producción esto vendría de Supabase con una query real.
@@ -1272,161 +1692,51 @@ const buildClientHistory = (client) => {
 
   const events = [];
 
-  // === CAJA: facturas con desglose ===
-  events.push({
-    id: `inv-${client.id}-1`, category: "caja", subtype: "factura",
-    date: fmt(daysAgo(3)), title: "Factura #00-0148291",
-    method: "Tarjeta de crédito", user: "Carlos M.",
-    items: [
-      { description: "Consulta general · Toby", qty: 1, unit: 35, total: 35 },
-      { description: "Otomax 14g", qty: 1, unit: 28, total: 28 },
-      { description: "Bravecto Plus 28mg", qty: 1, unit: 45, total: 45 },
-    ],
-    subtotal: 108, tax: 17.28, amount: 125.28,
-    status: "pagada",
-  });
-  events.push({
-    id: `inv-${client.id}-2`, category: "caja", subtype: "factura",
-    date: fmt(daysAgo(30)), title: "Factura #00-0144102",
-    method: "Transferencia bancaria", user: "Carlos M.",
-    items: [
-      { description: "Polivalente DHPPi", qty: 1, unit: 42, total: 42 },
-      { description: "Antirrábica", qty: 1, unit: 28, total: 28 },
-      { description: "Aplicación", qty: 2, unit: 8, total: 16 },
-    ],
-    subtotal: 86, tax: 13.76, amount: 99.76,
-    status: "pagada",
-  });
-  if (client.totalSpent > 3000) {
+  // === CAJA: recibos REALES del cliente ===
+  // Tomamos los recibos del array global de invoices y los mostramos en orden cronológico.
+  // Esto garantiza que los arrows links lleven a recibos que SÍ existen en el sistema,
+  // no a números mock que no matchean nada.
+  const clientInvoices = (allInvoices || [])
+    .filter(inv => inv.clientId === client.id)
+    .slice(0, 6);
+  clientInvoices.forEach(inv => {
+    const hasRecipe = (inv.items || []).some(it => it.recipe || it.recipePhoto || it.requiresRecipe);
     events.push({
-      id: `inv-${client.id}-3`, category: "caja", subtype: "factura",
-      date: fmt(daysAgo(75)), title: "Factura #00-0139554",
-      method: "Efectivo", user: "Carlos M.",
-      items: [
-        { description: "Limpieza dental con anestesia", qty: 1, unit: 220, total: 220 },
-        { description: "Pre-anestésico", qty: 1, unit: 35, total: 35 },
-        { description: "Antibiótico post-op", qty: 1, unit: 24, total: 24 },
-      ],
-      subtotal: 279, tax: 44.64, amount: 323.64,
-      status: "pagada",
+      id: `inv-real-${inv.id}`,
+      category: "caja",
+      subtype: "recibo",
+      date: inv.issueDate,
+      title: `Recibo #${inv.number}`,
+      method: inv.payments?.[0]?.method || "—",
+      user: inv.createdBy || "—",
+      items: (inv.items || []).map(it => ({
+        description: it.description || it.name || "Ítem",
+        qty: it.qty || 1,
+        unit: it.unit || 0,
+        total: it.total || 0,
+        recipe: it.recipe || null,
+        recipePhoto: it.recipePhoto || null,
+        requiresRecipe: it.requiresRecipe || false,
+      })),
+      subtotal: inv.subtotal || 0,
+      tax: inv.tax || 0,
+      amount: inv.total || 0,
+      status: inv.state === "pagado" ? "pagada" : inv.state === "emitido" ? "emitida" : inv.state,
+      hasRecipe,
+      invoiceNumber: inv.number,
+      delivery: inv.delivery || null,
     });
-  }
-
-  // === LABORATORIO: exámenes con estado de proceso ===
-  events.push({
-    id: `lab-${client.id}-1`, category: "laboratorio", subtype: "examen",
-    date: fmt(daysAgo(2)), title: "Hematología completa",
-    pet: "Toby", requestedBy: "Dra. Romero", lab: "Vetcheck",
-    state: "procesando",
-    timeline: [
-      { state: "solicitado", date: fmt(daysAgo(2)), by: "Dra. Romero" },
-      { state: "atendido",   date: fmt(daysAgo(2)), by: "Recepción" },
-      { state: "procesando", date: fmt(daysAgo(1)), by: "Lab. Vetcheck" },
-    ],
   });
-  events.push({
-    id: `lab-${client.id}-2`, category: "laboratorio", subtype: "examen",
-    date: fmt(daysAgo(45)), title: "Perfil hepático",
-    pet: "Toby", requestedBy: "Dra. Romero", lab: "Vetcheck",
-    state: "entregado",
-    note: "Ligero aumento ALT, control en 30 días.",
-    attachment: "quimica_hepatica.pdf",
-    timeline: [
-      { state: "solicitado", date: fmt(daysAgo(45)), by: "Dra. Romero" },
-      { state: "atendido",   date: fmt(daysAgo(45)), by: "Recepción" },
-      { state: "procesando", date: fmt(daysAgo(44)), by: "Lab. Vetcheck" },
-      { state: "entregado",  date: fmt(daysAgo(43)), by: "Lab. Vetcheck" },
-    ],
-  });
-  if (client.segment === "Premium" || client.segment === "Institucional") {
-    events.push({
-      id: `lab-${client.id}-3`, category: "laboratorio", subtype: "examen",
-      date: fmt(daysAgo(8)), title: "Urianálisis completo",
-      pet: client.petCodes.length > 1 ? "Múltiples" : "Toby",
-      requestedBy: "Dra. Romero", lab: "Vetcheck",
-      state: "solicitado",
-      timeline: [
-        { state: "solicitado", date: fmt(daysAgo(8)), by: "Dra. Romero" },
-      ],
-    });
-  }
 
-  // === VETERINARIA: citas próximas y pasadas ===
+  // === VETERINARIA: solo citas FUTURAS (próximas).
+  // Las citas pasadas se reflejan a través de los recibos en CAJA — cada recibo con
+  // servicio veterinario ES el registro de la consulta. No duplicamos en VETERINARIA. */
   events.push({
     id: `cit-${client.id}-1`, category: "veterinaria", subtype: "cita-proxima",
     date: fmt(new Date(today.getTime() + 7*24*3600*1000)),
     title: "Control post-tratamiento",
     pet: "Toby", doctor: "Dra. Romero", time: "10:30",
     formCompleted: false,
-  });
-  events.push({
-    id: `cit-${client.id}-2`, category: "veterinaria", subtype: "cita-realizada",
-    date: fmt(daysAgo(3)), title: "Consulta general",
-    pet: "Toby", doctor: "Dra. Romero",
-    diagnosis: "Otitis externa leve",
-    treatment: "Otomax 2 gotas cada 12h × 7 días",
-    note: "Estado óptimo en general. Control en 7 días.",
-  });
-  events.push({
-    id: `cit-${client.id}-3`, category: "veterinaria", subtype: "cita-realizada",
-    date: fmt(daysAgo(60)), title: "Refuerzo de vacuna polivalente",
-    pet: "Toby", doctor: "Dr. Henríquez",
-    note: "Sin reacciones adversas. Aplicado en hombro derecho.",
-  });
-
-  // === FARMACIA: recipes y dispensaciones ===
-  events.push({
-    id: `rx-${client.id}-1`, category: "farmacia", subtype: "recipe",
-    date: fmt(daysAgo(3)), title: "Recipe #RX-3421",
-    prescribedBy: "Dra. Romero", pet: "Toby",
-    medications: [
-      { name: "Otomax 14g", dose: "2 gotas / 12h", duration: "7 días" },
-      { name: "Bravecto Plus 28mg", dose: "1 comp", duration: "Dosis única" },
-    ],
-    state: "entregado",
-    timeline: [
-      { state: "solicitado", date: fmt(daysAgo(3)), by: "Dra. Romero" },
-      { state: "atendido",   date: fmt(daysAgo(3)), by: "Farmacia" },
-      { state: "entregado",  date: fmt(daysAgo(3)), by: "Farmacia" },
-    ],
-  });
-  events.push({
-    id: `rx-${client.id}-2`, category: "farmacia", subtype: "recipe",
-    date: fmt(daysAgo(1)), title: "Recipe #RX-3458",
-    prescribedBy: "Dra. Romero", pet: "Toby",
-    medications: [
-      { name: "Apoquel 16mg", dose: "1 comp / 12h", duration: "14 días" },
-    ],
-    state: "procesando",
-    timeline: [
-      { state: "solicitado", date: fmt(daysAgo(1)), by: "Dra. Romero" },
-      { state: "atendido",   date: fmt(daysAgo(1)), by: "Farmacia" },
-      { state: "procesando", date: fmt(daysAgo(1)), by: "Farmacia" },
-    ],
-  });
-
-  // === OTROS SERVICIOS ===
-  if (client.segment === "Premium" || client.segment === "Institucional") {
-    events.push({
-      id: `srv-${client.id}-1`, category: "externos", subtype: "servicio",
-      date: fmt(daysAgo(15)), title: "Hospedaje 3 noches",
-      provider: "Pet Hotel Caracas", reason: "Viaje del tutor",
-      amount: 180, status: "completado",
-    });
-  }
-  if (client.isOrg) {
-    events.push({
-      id: `srv-${client.id}-2`, category: "externos", subtype: "servicio",
-      date: fmt(daysAgo(50)), title: "Traslado en ambulancia",
-      provider: "VetMobile 24h", reason: "Emergencia · 2 mascotas",
-      amount: 120, status: "completado",
-    });
-  }
-  events.push({
-    id: `srv-${client.id}-3`, category: "externos", subtype: "servicio",
-    date: fmt(daysAgo(20)), title: "Sesión de fotos profesional",
-    provider: "Pet Photography Co.", reason: "Cumpleaños",
-    amount: 95, status: "completado",
   });
 
   return events.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -1534,7 +1844,7 @@ function buildInitialGroomingBookings() {
   // Seed manual y variado para demostrar bien el módulo:
   // - 4 en "Por hacer" (mascotas que llegan en el día, distintas razas/horarios)
   // - 4 en "En proceso" (con insumos y notas para mostrar el panel completo)
-  // - 4 en "Terminado" (para verificar que no se pueden mover, y la factura ya emitida)
+  // - 4 en "Terminado" (para verificar que no se pueden mover, y la recibo ya emitida)
   // Los `owner` que coinciden con CLIENTS_DATA (María Pérez, Ana García, Carlos Ramírez, Lucía Hernández, Luis Mendoza, Jorge Torres, Fundación Patitas Felices)
   // permitirán probar la ficha de tutor + chat integrado.
   // Los que NO coinciden (Patricia Mendoza, Ricardo Salas) muestran el caso "tutor sin registrar".
@@ -1647,7 +1957,58 @@ function buildInitialGroomingBookings() {
       reason: "Solo zona íntima.", room: "Sala A",
       status: "done", supplies: [], notes: "", clientId: null,
     },
-  ].map(b => ({ ...b, moduleId: "grooming-ops" }));
+    // === Pet 2 — bookings con tutores de esa sede ===
+    // Tutores Pet 2 según seed: Lucía Hernández, Verónica Castro, Fernando Ruiz,
+    // Patricia Gómez, Roberto Salazar, Carmen Linares
+    {
+      id: "gb-201", eventDate: todayStr, time: "09:30", duration: 60,
+      pet: "Bella", petCode: null, species: "dog", breed: "Schnauzer",
+      owner: "Lucía Hernández", service: "Baño + Corte completo",
+      reason: "Revisión mensual.", room: "Sala A Pet 2",
+      status: "pending", supplies: [], notes: "", clientId: null,
+      moduleId: "grooming-pet2", sedeId: "sede-pet2",
+    },
+    {
+      id: "gb-202", eventDate: todayStr, time: "11:00", duration: 30,
+      pet: "Simba", petCode: null, species: "cat", breed: "Maine Coon",
+      owner: "Verónica Castro", service: "Cepillado profundo",
+      reason: "Pelaje largo, requiere mantenimiento semanal.", room: "Sala B Pet 2",
+      status: "pending", supplies: [], notes: "", clientId: null,
+      moduleId: "grooming-pet2", sedeId: "sede-pet2",
+    },
+    {
+      id: "gb-203", eventDate: todayStr, time: "10:00", duration: 75,
+      pet: "Rocco", petCode: null, species: "dog", breed: "Pug",
+      owner: "Fernando Ruiz", service: "Spa completo",
+      reason: "Servicio premium con aromaterapia.", room: "Sala A Pet 2",
+      status: "in-progress",
+      supplies: [{ id: "s-pet2-1", name: "Shampoo neutro", qty: 1 }],
+      notes: "Cliente pidió aromaterapia de lavanda.", clientId: null,
+      moduleId: "grooming-pet2", sedeId: "sede-pet2",
+    },
+    {
+      id: "gb-204", eventDate: todayStr, time: "12:30", duration: 25,
+      pet: "Lola", petCode: null, species: "rabbit", breed: "Holland Lop",
+      owner: "Patricia Gómez", service: "Corte de uñas",
+      reason: "Mantenimiento mensual.", room: "Sala B Pet 2",
+      status: "done", supplies: [], notes: "", clientId: null,
+      moduleId: "grooming-pet2", sedeId: "sede-pet2",
+    },
+    {
+      id: "gb-205", eventDate: todayStr, time: "13:00", duration: 40,
+      pet: "Thor", petCode: null, species: "dog", breed: "Husky",
+      owner: "Roberto Salazar", service: "Baño básico",
+      reason: "Despigmentación post-baño en lago.", room: "Sala A Pet 2",
+      status: "done", supplies: [], notes: "Cliente satisfecho.", clientId: null,
+      moduleId: "grooming-pet2", sedeId: "sede-pet2",
+    },
+  ].map(b => ({
+    ...b,
+    // Solo asignamos "grooming-ops" si NO trae moduleId explícito. Esto preserva
+    // los bookings de Pet 2 (que ya tienen "grooming-pet2") y asigna Pet 1 a los demás.
+    moduleId: b.moduleId || "grooming-ops",
+    sedeId: b.sedeId || "sede-pet1",
+  }));
 }
 
 function buildInitialConversations(clients) {
@@ -1693,7 +2054,7 @@ function buildInitialConversations(clients) {
 }
 
 
-// === FACTURAS / VENTAS ===
+// === RECIBOS / VENTAS ===
 // Estados: borrador → emitido → pagado → finalizado
 //                              ↘ vencido (cuando emitido + fecha vencimiento pasada sin pago completo)
 const INVOICE_STATES = {
@@ -1713,40 +2074,174 @@ const buildInvoices = (clients) => {
   const daysAgo = (n) => new Date(today.getTime() - n*24*3600*1000);
   const fmt = (d) => d.toISOString().slice(0, 10);
 
+  // Pool de items realistas por tipo de CRM. Cada uno tiene descripción + precio base.
+  // Esto reemplaza el item plano "Consulta veterinaria + Medicamentos + Servicios"
+  // que se repetía en TODAS las recibos dando una impresión muy poco realista.
+  const VET_SERVICES = [
+    { description: "Consulta general", unit: 35 },
+    { description: "Consulta de control", unit: 25 },
+    { description: "Vacuna polivalente", unit: 28 },
+    { description: "Vacuna antirrábica", unit: 22 },
+    { description: "Vacuna triple felina", unit: 30 },
+    { description: "Desparasitación interna", unit: 18 },
+    { description: "Limpieza dental", unit: 95 },
+    { description: "Examen de laboratorio", unit: 65 },
+    { description: "Ecografía abdominal", unit: 80 },
+    { description: "Esterilización canina", unit: 150 },
+    { description: "Control post-quirúrgico", unit: 20 },
+    { description: "Cirugía menor", unit: 220 },
+  ];
+  const GROOMING_SERVICES = [
+    { description: "Baño básico", unit: 25 },
+    { description: "Baño + Corte completo", unit: 45 },
+    { description: "Corte de uñas", unit: 12 },
+    { description: "Limpieza de oídos", unit: 15 },
+    { description: "Spa completo", unit: 65 },
+    { description: "Corte higiénico", unit: 32 },
+    { description: "Cepillado profundo", unit: 28 },
+    { description: "Tratamiento antipulgas", unit: 35 },
+  ];
+  const PRODUCTS = [
+    { description: "Royal Canin Maxi Adult 15kg", unit: 89.50 },
+    { description: "Pro Plan Cat Adult 7.5kg", unit: 62.00 },
+    { description: "Collar antipulgas Seresto", unit: 45.00 },
+    { description: "Shampoo hipoalergénico", unit: 18.50 },
+    { description: "Snacks dentales 250g", unit: 8.50 },
+    { description: "Arena sanitaria 10kg", unit: 14.00 },
+    { description: "Pipeta Frontline", unit: 22.00 },
+    { description: "Cepillo cardador", unit: 24.50 },
+  ];
+  const MEDICINES = [
+    { description: "Amoxicilina 500mg (caja 30)", unit: 28.00, requiresRecipe: true,
+      recipe: { medication: "Amoxicilina 500mg", dose: "250mg", route: "Oral", frequency: "c/8h", duration: "7 días", instructions: "Administrar con alimento. Completar tratamiento." } },
+    { description: "Carprofeno 100mg (10 tabs)", unit: 35.00, requiresRecipe: true,
+      recipe: { medication: "Carprofeno 100mg", dose: "2mg/kg", route: "Oral", frequency: "c/12h", duration: "5 días", instructions: "No administrar con estómago vacío. Suspender si hay vómito." } },
+    { description: "Otomax — Suspensión ótica 14g", unit: 18.00, requiresRecipe: true,
+      recipe: { medication: "Otomax (Gentamicina/Betametasona/Clotrimazol)", dose: "2-4 gotas", route: "Ótica", frequency: "c/12h", duration: "7-14 días", instructions: "Limpiar canal auditivo antes de aplicar. No suspender antes de tiempo." } },
+    { description: "Antiparasitario oral", unit: 22.00, requiresRecipe: false },
+    { description: "Suplemento vitamínico", unit: 26.00, requiresRecipe: false },
+    { description: "Meloxicam 1.5mg/ml", unit: 18.00, requiresRecipe: true,
+      recipe: { medication: "Meloxicam 1.5mg/ml", dose: "0.1mg/kg", route: "Oral", frequency: "c/24h", duration: "3-5 días", instructions: "Administrar con jeringa dosificadora incluida. No usar en gatos sin supervisión." } },
+  ];
+
+  const pick = (arr, n) => {
+    const r = [];
+    const used = new Set();
+    while (r.length < n && r.length < arr.length) {
+      const i = Math.floor(Math.random() * arr.length);
+      if (!used.has(i)) { used.add(i); r.push(arr[i]); }
+    }
+    return r;
+  };
+
+  // Helper: encontrar módulo apropiado según sede del cliente.
+  // Los moduleIds están hardcodeados según los módulos seed: vet/grooming-ops/standard (Pet 1)
+  // y vet-pet2/grooming-pet2 (Pet 2). Si en el futuro cambian los ids, este helper falla
+  // silenciosamente y la recibo queda sin moduleId.
+  const moduleIdForSedeAndKind = (sedeId, kind) => {
+    if (sedeId === "sede-pet1") {
+      if (kind === "vet") return "vet";
+      if (kind === "grooming") return "grooming-ops";
+      if (kind === "b2b") return "standard";
+    }
+    if (sedeId === "sede-pet2") {
+      if (kind === "vet") return "vet-pet2";
+      if (kind === "grooming") return "grooming-pet2";
+    }
+    return null;
+  };
+
   let counter = 100;
   clients.forEach((c, idx) => {
-    // Cada cliente tiene 2-4 facturas según totalSpent
     const count = c.totalSpent > 5000 ? 4 : c.totalSpent > 2000 ? 3 : 2;
     for (let i = 0; i < count; i++) {
       counter++;
       const offsetDays = (i + 1) * 12 + idx * 3;
       const issueDate = daysAgo(offsetDays);
       const dueDate = daysAgo(offsetDays - 30);
-      const totalAmount = Math.round((c.totalSpent / count) * (0.7 + ((i + idx) % 5) * 0.1));
 
-      // Distribución de estados según posición
+      // Elegir el "kind" de la recibo: rotamos entre vet / grooming / mixto / b2b
+      // según el cliente y el índice de recibo. Las orgs (isOrg) tienden a b2b.
+      let kind;
+      if (c.isOrg) {
+        kind = "b2b";
+      } else {
+        const mix = (idx + i) % 5;
+        kind = mix < 2 ? "vet" : mix < 4 ? "grooming" : "mixto";
+      }
+
+      // Asignar moduleId y sedeId basándose en la sede del cliente
+      const sedeId = c.sedeOrigenId || null;
+      const primaryKind = kind === "mixto" ? "vet" : kind;
+      const moduleId = moduleIdForSedeAndKind(sedeId, primaryKind);
+
+      // Construir items realistas según el kind
+      let items = [];
+      if (kind === "vet") {
+        items = pick(VET_SERVICES, 1 + (i % 2)).map(s => ({ ...s, qty: 1, total: s.unit }));
+        // 50% de las veces, agregar una medicina
+        if ((idx + i) % 2 === 0) {
+          const med = pick(MEDICINES, 1)[0];
+          items.push({ ...med, qty: 1, total: med.unit });
+        }
+      } else if (kind === "grooming") {
+        items = pick(GROOMING_SERVICES, 1 + (i % 2)).map(s => ({ ...s, qty: 1, total: s.unit }));
+      } else if (kind === "b2b") {
+        // Ventas a institución: productos a granel
+        const products = pick(PRODUCTS, 2 + (i % 2));
+        items = products.map(p => {
+          const qty = 3 + Math.floor(Math.random() * 5);
+          return { ...p, qty, total: p.unit * qty };
+        });
+      } else { // mixto: vet + producto
+        const vet = pick(VET_SERVICES, 1)[0];
+        const prod = pick(PRODUCTS, 1)[0];
+        items = [
+          { ...vet, qty: 1, total: vet.unit },
+          { ...prod, qty: 1, total: prod.unit },
+        ];
+      }
+
+      // Calcular totales reales basados en los items (no inventados)
+      const subtotal = items.reduce((s, it) => s + it.total, 0);
+      const tax = Math.round(subtotal * 0.16 * 100) / 100;
+      const totalAmount = Math.round((subtotal + tax) * 100) / 100;
+
+      // Distribución de estados (idéntica a la lógica anterior)
       let state, paid, payments;
+      // Helper para generar un comprobante (voucher) realista por método de pago.
+      // ~60% de los pagos cerrados llevan voucher; los demás quedan como "no se registró"
+      // para reflejar el caso real donde a veces no se carga la referencia.
+      const makeVoucher = (method, seed) => {
+        const hasVoucher = (seed % 5) < 3; // ~60%
+        if (!hasVoucher) return null;
+        const num = String(1000000 + seed * 7919).slice(-6); // pseudo-aleatorio estable
+        if (method === "Transferencia")      return `REF-${num}`;
+        if (method === "Pago móvil")         return `PM-${num.slice(0, 4)}`;
+        if (method === "Tarjeta de crédito") return `AUTH-${num.slice(0, 5)}`;
+        if (method === "Tarjeta")            return `AUTH-${num.slice(0, 5)}`;
+        return null; // Efectivo no lleva comprobante por defecto
+      };
+
       if (i === 0 && idx % 4 === 0) {
-        // Algunos clientes tienen un borrador reciente
         state = "borrador"; paid = 0; payments = [];
       } else if (i === 0 && idx % 3 === 1) {
-        // Emitido sin pagar (deuda activa)
         state = "emitido"; paid = 0; payments = [];
       } else if (i === 1 && idx % 5 === 2) {
-        // Vencido
         state = "vencido"; paid = 0; payments = [];
       } else if (i === 1 && idx % 4 === 0) {
-        // Pago parcial
         state = "emitido";
-        paid = Math.round(totalAmount * 0.4);
+        paid = Math.round(totalAmount * 0.4 * 100) / 100;
+        const method1 = "Transferencia";
         payments = [
-          { id: `pay-${counter}-1`, date: fmt(daysAgo(offsetDays - 5)), amount: paid, method: "Transferencia", note: "Abono inicial" }
+          { id: `pay-${counter}-1`, date: fmt(daysAgo(offsetDays - 5)), amount: paid, method: method1, note: "Abono inicial", voucher: makeVoucher(method1, counter) }
         ];
       } else {
         state = i < count - 1 ? "pagado" : "finalizado";
         paid = totalAmount;
+        const method2 = PAY_METHODS[(idx + i) % 4];
         payments = [
-          { id: `pay-${counter}-1`, date: fmt(daysAgo(offsetDays)), amount: totalAmount, method: PAY_METHODS[(idx + i) % 4], note: "Pago completo" }
+          { id: `pay-${counter}-1`, date: fmt(daysAgo(offsetDays)), amount: totalAmount, method: method2, note: "Pago completo", voucher: makeVoucher(method2, counter) }
         ];
       }
 
@@ -1754,21 +2249,30 @@ const buildInvoices = (clients) => {
         id: `inv-${counter}`,
         number: `00-${String(counter).padStart(7, "0")}`,
         clientId: c.id,
+        sedeId,           // ← clave: para que sceneFilteredInvoices la encuentre
+        moduleId,         // ← clave: idem
         issueDate: fmt(issueDate),
         dueDate: fmt(dueDate),
         state,
-        items: [
-          { description: "Consulta veterinaria", qty: 1, unit: 35, total: 35 },
-          { description: "Medicamentos", qty: 1, unit: Math.round(totalAmount * 0.5), total: Math.round(totalAmount * 0.5) },
-          { description: "Servicios adicionales", qty: 1, unit: Math.round(totalAmount * 0.3), total: Math.round(totalAmount * 0.3) },
-        ],
-        subtotal: Math.round(totalAmount / 1.16),
-        tax: Math.round(totalAmount - totalAmount / 1.16),
+        items,
+        subtotal,
+        tax,
         total: totalAmount,
         paid,
-        balance: totalAmount - paid,
+        balance: Math.round((totalAmount - paid) * 100) / 100,
         payments,
         createdBy: "Carlos M.",
+        // ~20% de recibos tienen delivery
+        delivery: counter % 5 === 0 ? {
+          mode: counter % 10 === 0 ? "free" : "paid",
+          cost: counter % 10 === 0 ? 0 : 5,
+          status: state === "pagado" ? "entregado" : state === "emitido" ? "en-camino" : "preparando",
+          timeline: [
+            { status: "preparando", date: fmt(issueDate), by: "Carlos M." },
+            ...(state !== "borrador" ? [{ status: "en-camino", date: fmt(new Date(issueDate.getTime() + 86400000)), by: "Mensajero" }] : []),
+            ...(state === "pagado" ? [{ status: "entregado", date: fmt(new Date(issueDate.getTime() + 2*86400000)), by: "Mensajero" }] : []),
+          ],
+        } : null,
       });
     }
   });
@@ -1812,7 +2316,7 @@ const buildPaymentPlans = (invoices) => {
 
 
 
-function CricketApp({ visitorMessages = [], onBackToLanding, externalAgendaEvents = null, setExternalAgendaEvents = null, appointmentSettings = { autoApprove: true }, setAppointmentSettings = null }) {
+function CricketApp({ visitorMessages = [], onBackToLanding, externalAgendaEvents = null, setExternalAgendaEvents = null, appointmentSettings = { autoApprove: true }, setAppointmentSettings = null, externalSedes = null, setExternalSedes = null, externalActiveSedeId = null, setExternalActiveSedeId = null }) {
   const [user, setUser] = useState(null);
   const [loginError, setLoginError] = useState("");
   const [permissions, setPermissions] = useState(() => buildInitialPermissions());
@@ -1829,15 +2333,51 @@ function CricketApp({ visitorMessages = [], onBackToLanding, externalAgendaEvent
   // Inicializamos servicios derivando moduleId de su `module`. Vet → "vet", grooming → "grooming-ops",
   // b2b → "standard". Esto permite que cuando creemos un módulo nuevo (clon de un kind), podamos
   // clonar sus servicios y reasignar moduleId a la nueva instancia, sin tocar el resto.
-  const [globalServices, setGlobalServices] = useState(() =>
-    INITIAL_SERVICES.map(s => ({
+  const [globalServices, setGlobalServices] = useState(() => {
+    // === Seed de servicios por sede ===
+    // Los servicios originales (INITIAL_SERVICES) viven en Pet 1. Para Pet 2 clonamos
+    // los servicios vet/grooming con id nuevo, sede "sede-pet2" y módulo correspondiente.
+    // Aplicamos pequeñas variaciones de precio y horario para reflejar que cada sede
+    // puede tener su propia política operacional, aunque ofrezcan los mismos servicios.
+
+    // 1) Servicios originales — sede-pet1
+    const pet1Services = INITIAL_SERVICES.map(s => ({
       ...s,
+      sedeId: "sede-pet1",
       moduleId: s.module === "vet" ? "vet"
               : s.module === "grooming" ? "grooming-ops"
               : s.module === "b2b" ? "standard"
               : "vet",
-    }))
-  );
+    }));
+
+    // 2) Clonar vet y grooming para Pet 2. B2B (Mayoristas) queda solo en Pet 1
+    //    porque la institucional es típicamente una operación centralizada.
+    const pet2Services = INITIAL_SERVICES
+      .filter(s => s.module === "vet" || s.module === "grooming")
+      .map(s => {
+        // Variación de precio: +10% para Pet 2 (zona premium, por ejemplo).
+        // Si querés precios idénticos, cambiá el multiplicador a 1.
+        const adjustedPrice = Math.round(s.price * 1.10 * 100) / 100;
+        // Horarios un poco distintos: Pet 2 abre 1 hora más tarde, cierra 1 hora antes
+        const adjustHour = (t, deltaHours) => {
+          const [h, m] = t.split(":").map(Number);
+          const nh = Math.max(0, Math.min(23, h + deltaHours));
+          return `${String(nh).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+        };
+        return {
+          ...s,
+          id: `${s.id}-pet2`,                            // ← id único
+          sedeId: "sede-pet2",
+          moduleId: s.module === "vet" ? "vet-pet2" : "grooming-pet2",
+          price: adjustedPrice,
+          timeStart: adjustHour(s.timeStart, +1),       // abre 1h más tarde
+          timeEnd: adjustHour(s.timeEnd, -1),           // cierra 1h antes
+          soldCount: Math.floor(s.soldCount * 0.4),     // historial menor (sede más nueva)
+        };
+      });
+
+    return [...pet1Services, ...pet2Services];
+  });
   const [globalSupplies, setGlobalSupplies] = useState(GROOMING_SUPPLIES);
   const [globalVetSupplies, setGlobalVetSupplies] = useState(VET_SUPPLIES);
   const [globalProposals, setGlobalProposals] = useState([]);
@@ -1863,10 +2403,28 @@ function CricketApp({ visitorMessages = [], onBackToLanding, externalAgendaEvent
   // Cuando se elimina, se marca removed=true en lugar de borrarlo, así se puede reinstalar.
   // El "kind" indica cuál motor renderiza por dentro: "vet", "grooming", "standard".
   // Cuando hagamos el motor unificado, este campo dejará de importar.
+  // === SEDES (multi-sucursal) ===
+  // Cada sede agrupa sus propios módulos (Vet, Grooming, etc.). Los clientes,
+  // mascotas y recibos se filtran por sede. El concepto de "sede" reemplaza
+  // al antiguo "filtro por sede" que era solo visual.
+  // Si vienen sedes externas desde CricketLanding (compartidas con la landing pública),
+  // las usamos. Si no, fallback al state local (modo standalone).
+  const [localSedes, setLocalSedes] = useState(() => [
+    { id: "sede-pet1", name: "Pet 1", description: "Sucursal principal de Cricket.", active: true, isDefault: true },
+    { id: "sede-pet2", name: "Pet 2", description: "Sucursal de Cricket.", active: true, isDefault: false },
+  ]);
+  const sedes = externalSedes !== null ? externalSedes : localSedes;
+  const setSedes = setExternalSedes || setLocalSedes;
+  // Sede activa en el CRM (pestaña superior).
+  const [localActiveSedeId, setLocalActiveSedeId] = useState("sede-pet1");
+  const activeSedeId = externalActiveSedeId !== null ? externalActiveSedeId : localActiveSedeId;
+  const setActiveSedeId = setExternalActiveSedeId || setLocalActiveSedeId;
+
   const [globalModules, setGlobalModules] = useState(() => [
     {
       id: "vet",
       kind: "vet",
+      sedeId: "sede-pet1", // Veterinaria de Pet 1
       name: "Clínica Veterinaria",
       shortName: "Veterinaria",
       role: "Veterinario",
@@ -1892,7 +2450,7 @@ function CricketApp({ visitorMessages = [], onBackToLanding, externalAgendaEvent
         beforeAfterPhotos: false,     // Fotos antes/después
         floatingCalendar: false,      // Botón calendario flotante
         chatWithTutor: true,     // Chat integrado dentro del drawer
-        invoiceLink: true,       // Mostrar número de factura asociado en cards
+        invoiceLink: true,       // Mostrar número de recibo asociado en cards
         dragAndDrop: true,       // Drag & drop entre columnas del kanban
       },
       // Configuración de qué campos se muestran en cada card del kanban
@@ -1910,6 +2468,7 @@ function CricketApp({ visitorMessages = [], onBackToLanding, externalAgendaEvent
     {
       id: "grooming-ops",
       kind: "grooming",
+      sedeId: "sede-pet1", // Grooming de Pet 1
       name: "Atención Grooming",
       shortName: "Grooming",
       role: "Groomer",
@@ -1948,6 +2507,7 @@ function CricketApp({ visitorMessages = [], onBackToLanding, externalAgendaEvent
     {
       id: "standard",
       kind: "standard",
+      sedeId: "sede-pet1", // B2B vive en Pet 1 (la sede principal)
       name: "Mayoristas B2B",
       shortName: "B2B",
       role: "Vendedor B2B",
@@ -1983,6 +2543,58 @@ function CricketApp({ visitorMessages = [], onBackToLanding, externalAgendaEvent
         statusBadge: true,
       },
     },
+    // === Módulos de la sede Pet 2 ===
+    // Pet 2 arranca con Vet y Grooming. No tiene B2B (lo puede agregar el super si lo necesita).
+    {
+      id: "vet-pet2",
+      kind: "vet",
+      sedeId: "sede-pet2",
+      name: "Clínica Veterinaria",
+      shortName: "Veterinaria",
+      role: "Veterinario",
+      tone: "from-orange-100 to-orange-50 text-orange-800",
+      accent: "from-orange-500 to-orange-700",
+      icon: "Stethoscope",
+      removed: false,
+      core: false,
+      description: "Clínica veterinaria de Pet 2.",
+      meta: ["Diagnóstico → tratamiento", "Historia clínica", "Recetario digital"],
+      features: {
+        speciesFilters: true, followUp: true, agendaSidebar: true, walkIns: true,
+        medicationSuggester: true, clinicalHistory: true, suppliesDuringService: false,
+        beforeAfterPhotos: false, floatingCalendar: false, chatWithTutor: true,
+        invoiceLink: true, dragAndDrop: true,
+      },
+      cardFields: {
+        petName: true, petCode: true, breed: true, age: true,
+        tutorName: true, time: true, invoiceNumber: true, statusBadge: true,
+      },
+    },
+    {
+      id: "grooming-pet2",
+      kind: "grooming",
+      sedeId: "sede-pet2",
+      name: "Atención Grooming",
+      shortName: "Grooming",
+      role: "Groomer",
+      tone: "from-emerald-100 to-emerald-50 text-emerald-800",
+      accent: "from-emerald-500 to-emerald-700",
+      icon: "Bath",
+      removed: false,
+      core: false,
+      description: "Grooming de Pet 2.",
+      meta: ["Catálogo de servicios", "Agenda diaria", "Fotos antes/después"],
+      features: {
+        speciesFilters: false, followUp: false, agendaSidebar: false, walkIns: false,
+        medicationSuggester: false, clinicalHistory: false, suppliesDuringService: true,
+        beforeAfterPhotos: true, floatingCalendar: true, chatWithTutor: true,
+        invoiceLink: true, dragAndDrop: true,
+      },
+      cardFields: {
+        petName: true, petCode: false, breed: true, age: false,
+        tutorName: true, time: true, invoiceNumber: true, statusBadge: false,
+      },
+    },
   ]);
 
   // === Roles personalizados ===
@@ -2013,18 +2625,31 @@ function CricketApp({ visitorMessages = [], onBackToLanding, externalAgendaEvent
       role: a.role,
       roleLabel: a.roleLabel,
       active: true,
+      // === sedeIds ===
+      // Array de IDs de sedes a las que el usuario tiene acceso.
+      // - [] (vacío) → ve TODAS las sedes (usado por el super)
+      // - [id1, id2, ...] → solo ve esas sedes
+      // Tomamos del seed de ACCOUNTS si lo trae explícito; si no, fallback:
+      // super=[] (todas), otros=["sede-pet1"] (sede principal).
+      sedeIds: a.sedeIds !== undefined
+        ? a.sedeIds
+        : (a.role === "super" ? [] : ["sede-pet1"]),
+      // Preservamos el campo temporary del seed si existe (cuentas suplentes, freelancers)
+      ...(a.temporary ? { temporary: a.temporary } : {}),
       createdAt: new Date(Date.now() - (ACCOUNTS.length - idx) * 86400000 * 30).toISOString(),
     }))
   );
 
   const handleLogin = (email, password) => {
     // Buscar primero en globalUsers (incluye los creados desde Ajustes → Usuarios).
-    // Solo se permite login si el usuario está activo. ACCOUNTS legacy queda como
+    // Solo se permite login si el usuario está activo Y, si tiene acceso temporal,
+    // que la fecha de expiración no haya pasado. ACCOUNTS legacy queda como
     // fallback para retro-compatibilidad si por algún motivo globalUsers se vacía.
     const matchedUser = globalUsers.find(
       u => u.email.toLowerCase() === email.toLowerCase().trim()
         && u.password === password
         && u.active !== false
+        && (!u.temporary?.expiresAt || new Date(u.temporary.expiresAt).getTime() > Date.now())
     );
     if (matchedUser) {
       setLoginError("");
@@ -2050,6 +2675,7 @@ function CricketApp({ visitorMessages = [], onBackToLanding, externalAgendaEvent
   return (
     <AuthenticatedApp
       user={user}
+      setUser={setUser}
       onLogout={() => setUser(null)}
       permissions={permissions}
       setPermissions={setPermissions}
@@ -2086,6 +2712,10 @@ function CricketApp({ visitorMessages = [], onBackToLanding, externalAgendaEvent
       setGlobalUsers={setGlobalUsers}
       appointmentSettings={appointmentSettings}
       setAppointmentSettings={setAppointmentSettings}
+      sedes={sedes}
+      setSedes={setSedes}
+      activeSedeId={activeSedeId}
+      setActiveSedeId={setActiveSedeId}
     />
   );
 }
@@ -2093,7 +2723,7 @@ function CricketApp({ visitorMessages = [], onBackToLanding, externalAgendaEvent
 // ========== APP AUTENTICADA ==========
 
 function AuthenticatedApp({
-  user, onLogout, permissions, setPermissions, visitorMessages = [],
+  user, setUser = null, onLogout, permissions, setPermissions, visitorMessages = [],
   globalClients, setGlobalClients,
   globalInvoices, setGlobalInvoices,
   globalPaymentPlans, setGlobalPaymentPlans,
@@ -2111,8 +2741,28 @@ function AuthenticatedApp({
   globalUsers, setGlobalUsers,
   appointmentSettings = { autoApprove: true },
   setAppointmentSettings = null,
+  sedes = [],
+  setSedes = null,
+  activeSedeId = null,
+  setActiveSedeId = null,
 }) {
- const perm = permissions[user.role];
+ // === Permisos efectivos del usuario logueado ===
+ // Un usuario puede tener overrides de permisos a nivel personal
+ // (user.permissionOverrides), editables desde la pestaña "Permisos específicos"
+ // del modal de usuario. Aquí los fusionamos sobre los permisos de su rol para
+ // obtener los permisos que realmente aplican a ESTA sesión. RolesView y
+ // UsersView siguen recibiendo `permissions` crudo (editan el rol, no al usuario).
+ const effectivePermissions = useMemo(() => {
+   const overrides = user?.permissionOverrides;
+   const rolePerm = permissions[user.role];
+   if (!rolePerm || !overrides || Object.keys(overrides).length === 0) return permissions;
+   const mergedFields = { ...(rolePerm.fields || {}) };
+   Object.entries(overrides).forEach(([crmId, fields]) => {
+     mergedFields[crmId] = { ...(mergedFields[crmId] || {}), ...fields };
+   });
+   return { ...permissions, [user.role]: { ...rolePerm, fields: mergedFields } };
+ }, [permissions, user]);
+ const perm = effectivePermissions[user.role];
  // Vista inicial al hacer login: dashboard si tiene permiso (es la pantalla más
  // útil al entrar — muestra panorama del día). Si su rol NO tiene "dashboard"
  // habilitado, cae a la primera vista permitida.
@@ -2133,6 +2783,50 @@ function AuthenticatedApp({
  const [customModules, setCustomModules] = useState([]);
  const [passportSearchInit, setPassportSearchInit] = useState("");
  const [vetPassportSearchInit, setVetPassportSearchInit] = useState("");
+ const [salesSearchInit, setSalesSearchInit] = useState("");
+
+ // === Plantilla global de mensaje de reserva ===
+ // Configurable desde el header (botón ⚙️) o desde el formulario de agendar.
+ // Vive en AuthenticatedApp para que sea global y persistente durante la sesión.
+ const [msgTemplate, setMsgTemplate] = useState({
+   showPetName: true, showDate: true, showTime: true, showServices: true,
+   showPrice: true, showDuration: false, showNotes: false,
+   greeting: "✅ Reserva confirmada", closing: "¡Te esperamos!",
+   showGreeting: true, showClosing: true,
+ });
+ const [showMsgTemplateConfig, setShowMsgTemplateConfig] = useState(false);
+
+ // === Métodos de pago configurables ===
+ // Levantado a AuthenticatedApp para que SaleBuilder lo use al construir un
+ // recibo y la vista de Ajustes pueda editar qué métodos están activos, su
+ // orden y su etiqueta. Cada método: { id, label, Icon (nombre), enabled, requiresVoucher }.
+ const [paymentMethods, setPaymentMethods] = useState([
+   { id: "efectivo",      label: "Efectivo",       iconName: "Banknote",       enabled: true,  requiresVoucher: false, details: {} },
+   { id: "tarjeta",       label: "Tarjeta",        iconName: "CreditCard",     enabled: true,  requiresVoucher: true,
+     details: { bank: "Banesco", terminal: "Verifone VX520", lastDigits: "" } },
+   { id: "transferencia", label: "Transferencia",  iconName: "ArrowRightLeft", enabled: true,  requiresVoucher: true,
+     details: {
+       bank: "Banco de Venezuela",
+       accountNumber: "0102-0000-00-00000000000",
+       accountType: "Corriente",
+       holderName: "Cricket Pet Services C.A.",
+       holderId: "J-12345678-9",
+     } },
+   { id: "pago-movil",    label: "Pago móvil",     iconName: "Smartphone",     enabled: true,  requiresVoucher: true,
+     details: { bank: "Banesco (0134)", phone: "0414-1234567", holderId: "J-12345678-9" } },
+   { id: "zelle",         label: "Zelle",          iconName: "Wallet",         enabled: false, requiresVoucher: true,
+     details: { email: "pagos@cricketpet.com", phone: "", holderName: "Cricket Pet LLC" } },
+   { id: "binance",       label: "Cripto (USDT)",  iconName: "Coins",          enabled: false, requiresVoucher: true,
+     details: { network: "TRC-20", walletAddress: "TXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", qrCode: null } },
+ ]);
+
+ // === Inventario global (productos + insumos) ===
+ // Levantado desde InventoryView para que SaleBuilder acceda a los medicamentos
+ // del inventario real en lugar de un catálogo hardcodeado.
+ const [inventoryItems, setInventoryItems] = useState(() => [
+   ...INVENTORY_PRODUCTS.map(p => ({ ...p, isProduct: true, isSupply: false })),
+   ...INVENTORY_SUPPLIES.map(s => ({ ...s, isProduct: false, isSupply: true })),
+ ]);
 
  // Aliases hacia el state global del padre para que el resto del componente
  // siga usando los nombres cortos (clients, invoices, etc.) sin tener que tocar nada más.
@@ -2194,24 +2888,24 @@ function AuthenticatedApp({
 
  // === Handlers de gestión de módulos ===
  // Eliminar un módulo soft-delete: marca removed=true. Antes de eso:
- //   1) Bookings activos del módulo se convierten a facturas concluidas en Ventas
+ //   1) Bookings activos del módulo se convierten a recibos concluidas en Ventas
  //      (con cinta "✓ Concluido" — Ventas decide cobro y cierre).
  //   2) Servicios del catálogo asociados al módulo se DESACTIVAN (no se borran).
- //      Así, las facturas históricas que referencian esos servicios siguen funcionando.
+ //      Así, las recibos históricas que referencian esos servicios siguen funcionando.
  //   3) Eventos futuros de agenda del módulo se eliminan (no tienen sentido si el
  //      módulo no opera). Eventos pasados se conservan como histórico.
- // Los datos de Ventas, Clientes, Pasaportes y facturas NO se tocan: son tronco.
+ // Los datos de Ventas, Clientes, Pasaportes y recibos NO se tocan: son tronco.
  const handleRemoveModule = (moduleId) => {
    const mod = (modules || []).find(m => m.id === moduleId);
    if (!mod) return;
 
    // 1) Cerrar bookings activos del módulo (solo grooming usa este sistema hoy)
-   //    Convertimos cada uno a una factura concluida.
+   //    Convertimos cada uno a una recibo concluida.
    if (moduleId === "grooming-ops" && groomingBookings.length > 0) {
      const activeBookings = groomingBookings.filter(b => b.status === "pending" || b.status === "active");
 
      activeBookings.forEach(b => {
-       // Si el booking ya tenía factura asociada (vino de venta express), solo la marcamos completed
+       // Si el booking ya tenía recibo asociada (vino de venta express), solo la marcamos completed
        if (b.invoiceId) {
          setInvoices(prev => prev.map(inv => {
            if (inv.id !== b.invoiceId) return inv;
@@ -2223,7 +2917,7 @@ function AuthenticatedApp({
            };
          }));
        } else {
-         // Booking sin factura previa: emitir factura express con precios del catálogo
+         // Booking sin recibo previa: emitir recibo express con precios del catálogo
          const svcDef = (services || []).find(s => s.module === "grooming" && (s.name || "").toLowerCase().trim() === (b.service || "").toLowerCase().trim());
          const price = svcDef?.price ?? 0;
          const items = [{ id: "svc", description: b.service, qty: 1, unit: price, total: price }];
@@ -2456,13 +3150,13 @@ function AuthenticatedApp({
      return;
    }
    // Si el destino es un módulo instalado (sea core o un clon), validar que el rol
-   // tenga el permiso INDIVIDUAL para esa instancia. Cada módulo es un id propio en
-   // la matriz de permisos, así que no se hereda de su kind base.
+   // tenga permiso a esa instancia. Pasamos `modules` para que canAccess pueda
+   // resolver por kind (ej: rol "vet" → acceso a "vet" Y a "vet-pet2", "vet-pet3"...)
    if (targetModule && !targetModule.removed) {
-     if (canAccess(perm, v)) { setView(v); return; }
+     if (canAccess(perm, v, modules)) { setView(v); return; }
      return;
    }
-   if (canAccess(perm, v) || customModules.find(m => m.id === v)) {
+   if (canAccess(perm, v, modules) || customModules.find(m => m.id === v)) {
      setView(v);
    }
  };
@@ -2496,7 +3190,7 @@ function AuthenticatedApp({
  onNewClientFull={() => setShowNewClient(true)}
  user={user}
  onLogout={onLogout}
- permissions={permissions}
+ permissions={effectivePermissions}
  unreadMessagesCount={unreadMessagesCount}
  petUpdates={petUpdates}
  collapsed={sidebarCollapsed}
@@ -2518,6 +3212,7 @@ function AuthenticatedApp({
    <SettingsHubView
      role={user.role}
      can={(v) => canAccess(perm, v)}
+     permissions={effectivePermissions}
      onNavigate={(id) => setView(id)}
    />
  )}
@@ -2532,19 +3227,27 @@ function AuthenticatedApp({
    onRemoveModule={(moduleId) => handleRemoveModule(moduleId)}
    onReinstallModule={(moduleId) => handleReinstallModule(moduleId)}
    onRenameModule={(moduleId, newName) => handleRenameModule(moduleId, newName)}
+   sedes={sedes}
+   setSedes={setSedes}
  />
  )}
  {view === "crm" && (
    <CRMHubView
      userRole={user.role}
      perm={perm}
+     permissions={effectivePermissions}
      modules={modules}
+     sedes={sedes}
+     setSedes={setSedes}
+     activeSedeId={activeSedeId}
+     setActiveSedeId={setActiveSedeId}
+     user={user}
      onSelectSection={(sectionView) => safeSetView(sectionView)}
      // Pass-through props para que cada subvista funcione exactamente igual que stand-alone
      vetProps={{ onOpenPassport: goToPassport, onOpenVetPassport: goToVetPassport, canAccessVetPassport: canAccess(perm, "vet-passport"), vetSupplies, clients, invoices, setInvoices, passports, setPassports, onGoToSales: () => safeSetView("sales"), userName: user.name, onMessageClient: openChatWith, canMessage: canAccess(perm, "messages"), conversations, onSendMessage: sendMessage, userRole: user.role, permissions, modules, agendaEvents, setAgendaEvents }}
      groomingOpsProps={{ clients, passports, invoices, setInvoices, userRole: user.role, proposals, setProposals, services, setServices, supplies, setSupplies, onMessageClient: openChatWith, canMessage: canAccess(perm, "messages"), conversations, onSendMessage: sendMessage, bookings: groomingBookings, setBookings: setGroomingBookings, petUpdates, onSubmitPetUpdate: submitPetUpdate, setPassports, userName: user.name, permissions, modules }}
      standardProps={{ title: (modules.find(m => m.id === "standard")?.name) || "Mayoristas B2B" }}
-     salesProps={{ invoices, setInvoices, clients, paymentPlans, setPaymentPlans, onMessageClient: openChatWith, modules, userRole: user.role, customRoles }}
+     salesProps={{ invoices, setInvoices, clients, paymentPlans, setPaymentPlans, onMessageClient: openChatWith, modules, userRole: user.role, customRoles, activeSedeId, sedes }}
      onGoToManager={() => setView("manager")}
    />
  )}
@@ -2559,43 +3262,61 @@ function AuthenticatedApp({
  )}
  {view === "client-settings" && <ComingSoon view="client-settings" />}
  {view === "agenda-settings" && <AgendaSettingsView appointmentSettings={appointmentSettings} setAppointmentSettings={setAppointmentSettings} userRole={user.role} agendaEvents={agendaEvents} />}
- {view === "vet" && isModuleInstalled("vet") && <VetCRM onOpenPassport={goToPassport} onOpenVetPassport={goToVetPassport} canAccessVetPassport={canAccess(perm, "vet-passport")} vetSupplies={vetSupplies} clients={clients} invoices={invoices} setInvoices={setInvoices} passports={passports} setPassports={setPassports} onGoToSales={() => safeSetView("sales")} userName={user.name} onMessageClient={openChatWith} canMessage={canAccess(perm, "messages")} conversations={conversations} onSendMessage={sendMessage} userRole={user.role} permissions={permissions} modules={modules} agendaEvents={agendaEvents} setAgendaEvents={setAgendaEvents} />}
- {view === "vet-passport" && <VetPassportView passports={passports} setPassports={setPassports} initialSearch={vetPassportSearchInit} onClearInitialSearch={() => setVetPassportSearchInit("")} userName={user.name} userRole={user.role} permissions={permissions} />}
- {view === "grooming" && <GroomingCRM onOpenPassport={goToPassport} services={services} setServices={setServices} supplies={supplies} setSupplies={setSupplies} userRole={user.role} />}
- {view === "vet-catalog" && <VetCatalogView services={services} setServices={setServices} vetSupplies={vetSupplies} setVetSupplies={setVetSupplies} userRole={user.role} />}
- {view === "grooming-ops" && isModuleInstalled("grooming-ops") && <GroomingOpsView clients={clients} passports={passports} invoices={invoices} setInvoices={setInvoices} userRole={user.role} proposals={proposals} setProposals={setProposals} services={services} setServices={setServices} supplies={supplies} setSupplies={setSupplies} onMessageClient={openChatWith} canMessage={canAccess(perm, "messages")} conversations={conversations} onSendMessage={sendMessage} bookings={groomingBookings} setBookings={setGroomingBookings} petUpdates={petUpdates} onSubmitPetUpdate={submitPetUpdate} setPassports={setPassports} userName={user.name} permissions={permissions} modules={modules} />}
- {view === "standard" && isModuleInstalled("standard") && <StandardCRM title={(modules.find(m => m.id === "standard")?.name) || "Mayoristas B2B"} />}
- {/* Routing dinámico para módulos clonados (mismo kind, otro id).
-     Cuando el usuario crea "Veterinaria 2" desde Manager, su id es por ejemplo
-     "vet-lxabc123". Aquí lo capturamos para renderizar el motor según su kind,
-     pasándole el módulo concreto via activeModule para que sus features y
-     columnas se apliquen correctamente. */}
+ {view === "payment-methods" && <PaymentMethodsView paymentMethods={paymentMethods} setPaymentMethods={setPaymentMethods} userRole={user.role} permissions={effectivePermissions} />}
+{view === "analytics" && <AnalyticsView userRole={user.role} clients={clients} passports={passports} invoices={invoices} services={services} agendaEvents={agendaEvents} groomingBookings={groomingBookings} conversations={conversations} modules={modules} customRoles={customRoles} users={users} />}
+{view === "inventory-mgmt" && <InventoryView userRole={user.role} modules={modules} sedes={sedes} user={user} items={inventoryItems} setItems={setInventoryItems} />}
+ {/* === Render dinámico de módulos por kind ===
+     Antes había `view === "vet"` literal, que no funcionaba para clones como
+     "vet-pet2". Ahora resolvemos el kind del módulo activo y renderizamos el
+     motor correspondiente. activeModule se pasa como prop para que cada motor
+     pueda mostrar el nombre y la sede correcta. */}
  {(() => {
-   // No procesar si el view es un id core ya manejado arriba o una vista del tronco
-   const coreViews = ["dashboard","crm","manager","modules","vet","vet-passport","grooming","vet-catalog","grooming-ops","standard","passport","roles","clients","sales","new-service","agenda","messages","profile","client-settings","agenda-settings","settings-hub","products","inventory"];
-   if (coreViews.includes(view)) return null;
-   const targetModule = (modules || []).find(m => m.id === view && !m.removed);
-   if (!targetModule) return null;
-   if (targetModule.kind === "vet") {
-     return <VetCRM onOpenPassport={goToPassport} onOpenVetPassport={goToVetPassport} canAccessVetPassport={canAccess(perm, "vet-passport")} vetSupplies={vetSupplies} clients={clients} invoices={invoices} setInvoices={setInvoices} passports={passports} setPassports={setPassports} onGoToSales={() => safeSetView("sales")} userName={user.name} onMessageClient={openChatWith} canMessage={canAccess(perm, "messages")} conversations={conversations} onSendMessage={sendMessage} userRole={user.role} permissions={permissions} modules={modules} activeModule={targetModule} agendaEvents={agendaEvents} setAgendaEvents={setAgendaEvents} />;
+   if (!view) return null;
+   const activeMod = (modules || []).find(m => m.id === view && !m.removed);
+   if (!activeMod) return null;
+   if (activeMod.kind === "vet") {
+     return <VetCRM onOpenPassport={goToPassport} onOpenVetPassport={goToVetPassport} canAccessVetPassport={canAccess(perm, "vet-passport")} vetSupplies={vetSupplies} clients={clients} invoices={invoices} setInvoices={setInvoices} passports={passports} setPassports={setPassports} onGoToSales={() => safeSetView("sales")} userName={user.name} onMessageClient={openChatWith} canMessage={canAccess(perm, "messages")} conversations={conversations} onSendMessage={sendMessage} userRole={user.role} permissions={effectivePermissions} modules={modules} agendaEvents={agendaEvents} setAgendaEvents={setAgendaEvents} activeModule={activeMod} />;
    }
-   if (targetModule.kind === "grooming") {
-     return <GroomingOpsView clients={clients} passports={passports} invoices={invoices} setInvoices={setInvoices} userRole={user.role} proposals={proposals} setProposals={setProposals} services={services} setServices={setServices} supplies={supplies} setSupplies={setSupplies} onMessageClient={openChatWith} canMessage={canAccess(perm, "messages")} conversations={conversations} onSendMessage={sendMessage} bookings={groomingBookings} setBookings={setGroomingBookings} petUpdates={petUpdates} onSubmitPetUpdate={submitPetUpdate} setPassports={setPassports} userName={user.name} permissions={permissions} modules={modules} activeModule={targetModule} />;
+   if (activeMod.kind === "grooming") {
+     return <GroomingOpsView clients={clients} passports={passports} invoices={invoices} setInvoices={setInvoices} userRole={user.role} proposals={proposals} setProposals={setProposals} services={services} setServices={setServices} supplies={supplies} setSupplies={setSupplies} onMessageClient={openChatWith} canMessage={canAccess(perm, "messages")} conversations={conversations} onSendMessage={sendMessage} bookings={groomingBookings} setBookings={setGroomingBookings} petUpdates={petUpdates} onSubmitPetUpdate={submitPetUpdate} setPassports={setPassports} userName={user.name} permissions={effectivePermissions} modules={modules} activeModule={activeMod} />;
    }
-   if (targetModule.kind === "standard") {
-     return <StandardCRM title={targetModule.name || "Pipeline"} />;
+   if (activeMod.kind === "standard") {
+     return <StandardCRM title={activeMod.name || "Mayoristas B2B"} customFields={activeMod.customFields} activeModule={activeMod} />;
+   }
+   if (activeMod.kind === "custom") {
+     // CRM personalizado creado desde el wizard. Usa el mismo motor que el
+     // estándar — sólo cambian las columnas, los campos y el rol.
+     return <StandardCRM title={activeMod.name} customFields={activeMod.fields} activeModule={activeMod} />;
    }
    return null;
  })()}
+ {view === "vet-passport" && <VetPassportView passports={passports} setPassports={setPassports} initialSearch={vetPassportSearchInit} onClearInitialSearch={() => setVetPassportSearchInit("")} userName={user.name} userRole={user.role} permissions={effectivePermissions} />}
+ {view === "grooming" && <GroomingCRM onOpenPassport={goToPassport} services={services} setServices={setServices} supplies={supplies} setSupplies={setSupplies} userRole={user.role} />}
+ {view === "vet-catalog" && <VetCatalogView services={services} setServices={setServices} vetSupplies={vetSupplies} setVetSupplies={setVetSupplies} userRole={user.role} />}
+ {/* Los renders de vet, grooming-ops y standard ahora viven en el render dinámico
+     por kind (arriba). Eso permite que vet-pet2, grooming-pet2, etc. funcionen. */}
+ {/* El routing de módulos (vet, grooming, standard, custom y clones de cualquier sede)
+     se hace UNA SOLA VEZ en el bloque dinámico de arriba. Antes había un segundo bloque
+     que duplicaba el render para clones — eso causaba dobles renderizados y crashes. */}
  {view === "passport" && <PassportView passports={passports} setPassports={setPassports} clients={clients} setClients={setClients} canCreate={perm.canCreateClient} initialSearch={passportSearchInit} onClearInitialSearch={() => setPassportSearchInit("")} onMessageClient={openChatWith} />}
- {view === "roles" && <RolesView permissions={permissions} setPermissions={setPermissions} modules={modules} customRoles={customRoles} setCustomRoles={setCustomRoles} />}
- {view === "users" && user.role === "super" && <UsersView users={users} setUsers={setUsers} permissions={permissions} customRoles={customRoles} modules={modules} />}
- {view === "clients" && <ClientsView clients={clients} passports={passports} setPassports={setPassports} invoices={invoices} conversations={conversations} canCreate={perm.canCreateClient} onNewClient={() => setShowNewClient(true)} onOpenPassport={goToPassport} onOpenSales={() => setView("sales")} onMessageClient={openChatWith} onCompleteRegistration={(c) => setCompleteClient(c)} userRole={user.role} permissions={permissions} petUpdates={petUpdates} setPetUpdates={setPetUpdates} userName={user.name} initialTab={clientsInitialTab} onTabConsumed={() => setClientsInitialTab(null)} />}
- {view === "sales" && <SalesView invoices={invoices} setInvoices={setInvoices} clients={clients} paymentPlans={paymentPlans} setPaymentPlans={setPaymentPlans} onMessageClient={openChatWith} modules={modules} userRole={user.role} customRoles={customRoles} />}
- {view === "new-service" && <NewServiceView services={services} setServices={setServices} supplies={supplies} clients={clients} passports={passports} invoices={invoices} setInvoices={setInvoices} groomingBookings={groomingBookings} setGroomingBookings={setGroomingBookings} agendaEvents={agendaEvents} setAgendaEvents={setAgendaEvents} userName={user.name} modules={modules} onGoToSales={() => setView("sales")} preselectedClient={preselectedSaleClient} onClearPreselected={() => setPreselectedSaleClient(null)} />}
- {view === "agenda" && <AgendaView onOpenPassport={goToPassport} userRole={user.role} permissions={permissions} events={agendaEvents} setEvents={setAgendaEvents} invoices={invoices} />}
- {view === "messages" && <MessagesView clients={clientsWithVisitor} setClients={setClients} passports={passports} setPassports={setPassports} conversations={conversationsWithVisitor} onSendMessage={sendMessage} invoices={invoices} onGoToInvoice={(invoiceId) => { safeSetView("sales"); }} />}
- {view === "profile" && <UserProfileView user={user} />}
+ {view === "roles" && <RolesView permissions={permissions} setPermissions={setPermissions} modules={modules} customRoles={customRoles} setCustomRoles={setCustomRoles} users={users} sedes={sedes} />}
+ {view === "users" && user.role === "super" && <UsersView users={users} setUsers={setUsers} permissions={permissions} customRoles={customRoles} modules={modules} sedes={sedes} currentUser={user} setCurrentUser={setUser} />}
+ {view === "clients" && <ClientsView clients={clients} passports={passports} setPassports={setPassports} setClients={setClients} invoices={invoices} conversations={conversations} canCreate={perm.canCreateClient} onNewClient={() => setShowNewClient(true)} onNewClientQuick={() => setShowQuickClient(true)} onOpenPassport={goToPassport} onOpenSales={() => setView("sales")} onGoToInvoice={(invNumber) => { setSalesSearchInit((invNumber || "").replace("#", "")); safeSetView("sales"); }} onMessageClient={openChatWith} onCompleteRegistration={(c) => setCompleteClient(c)} userRole={user.role} permissions={effectivePermissions} petUpdates={petUpdates} setPetUpdates={setPetUpdates} userName={user.name} initialTab={clientsInitialTab} onTabConsumed={() => setClientsInitialTab(null)} user={user} sedes={sedes} activeSedeId={activeSedeId} onNewSale={(clientId, withForm) => {
+   const target = clientId ? clients.find(c => c.id === clientId) : null;
+   if (withForm && target) {
+     // "Con ficha completa": abre el wizard de registro con el cliente existente
+     // para agregar mascota + datos clínicos antes de ir a facturar
+     setCompleteClient(target);
+   } else {
+     setPreselectedSaleClient(target);
+     safeSetView("new-service");
+   }
+ }} />}
+ {view === "sales" && <SalesView invoices={invoices} setInvoices={setInvoices} clients={clients} paymentPlans={paymentPlans} setPaymentPlans={setPaymentPlans} onMessageClient={openChatWith} modules={modules} userRole={user.role} customRoles={customRoles} activeSedeId={activeSedeId} sedes={sedes} initialSearch={salesSearchInit} onSearchConsumed={() => setSalesSearchInit("")} />}
+ {view === "new-service" && <NewServiceView services={services} setServices={setServices} supplies={supplies} clients={clients} passports={passports} invoices={invoices} setInvoices={setInvoices} groomingBookings={groomingBookings} setGroomingBookings={setGroomingBookings} agendaEvents={agendaEvents} setAgendaEvents={setAgendaEvents} userName={user.name} modules={modules} onGoToSales={() => setView("sales")} preselectedClient={preselectedSaleClient} onClearPreselected={() => setPreselectedSaleClient(null)} sedes={sedes} activeSedeId={activeSedeId} userSedeIds={user.sedeIds || []} inventoryItems={inventoryItems} paymentMethods={paymentMethods} />}
+ {view === "agenda" && <AgendaView onOpenPassport={goToPassport} userRole={user.role} permissions={effectivePermissions} events={agendaEvents} setEvents={setAgendaEvents} invoices={invoices} sedes={sedes} modules={modules} user={user} />}
+ {view === "messages" && <MessagesView clients={clientsWithVisitor} setClients={setClients} passports={passports} setPassports={setPassports} conversations={conversationsWithVisitor} onSendMessage={sendMessage} invoices={invoices} setInvoices={setInvoices} onGoToInvoice={(invoiceId) => { safeSetView("sales"); }} user={user} userRole={user.role} permissions={effectivePermissions} agendaEvents={agendaEvents} setAgendaEvents={setAgendaEvents} modules={modules} sedes={sedes} services={services} groomingBookings={groomingBookings} setGroomingBookings={setGroomingBookings} msgTemplate={msgTemplate} setMsgTemplate={setMsgTemplate} onOpenMsgConfig={() => setShowMsgTemplateConfig(true)} paymentMethods={paymentMethods} />}
+ {view === "profile" && <UserProfileView user={user} setUser={setUser} />}
  {view === "dashboard" && <DashboardView
    user={user}
    userRole={user.role}
@@ -2612,7 +3333,7 @@ function AuthenticatedApp({
    supplies={supplies}
    vetSupplies={vetSupplies}
    onNavigate={(v) => safeSetView(v)}
-   permissions={permissions}
+   permissions={effectivePermissions}
  />}
  {["inventory", "reports", "config"].includes(view) && <ComingSoon view={view} />}
  {customModules.find(m => m.id === view) && (
@@ -2628,6 +3349,8 @@ function AuthenticatedApp({
  <CreateModuleModal
    onClose={() => setShowCreateModule(false)}
    modules={modules}
+   sedes={sedes}
+   activeSedeId={activeSedeId}
    onCreate={(mod) => {
      // Los módulos creados por plantilla se agregan al registro principal globalModules.
      // No al state legacy customModules — ese se mantiene solo para compatibilidad.
@@ -2704,6 +3427,8 @@ function AuthenticatedApp({
    perm={perm}
    customModules={customModules}
    modules={modules}
+   user={user}
+   activeSedeId={activeSedeId}
    onCreated={(code, destination, clientId, client) => {
      setShowNewClient(false);
      // El usuario eligió un destino concreto en el último paso del wizard.
@@ -2711,7 +3436,7 @@ function AuthenticatedApp({
      if (destination === "vet")             { setView("vet"); return; }
      if (destination === "grooming-ops")    { setView("grooming-ops"); return; }
      if (destination === "sales")           {
-       // "Crear factura": preseleccionar el tutor recién registrado y abrir SaleBuilder.
+       // "Crear recibo": preseleccionar el tutor recién registrado y abrir SaleBuilder.
        // Usamos el snapshot que NewClientModal nos pasó (no buscamos en `clients`
        // porque el setClients aún no se reflejó en este tick).
        const target = client || (clientId ? clients.find(c => c.id === clientId) : null);
@@ -2739,11 +3464,22 @@ function AuthenticatedApp({
    />
  )}
 
+ {/* Modal global: Configurar plantilla de mensaje de reserva */}
+ {showMsgTemplateConfig && (
+   <MsgTemplateConfigModal
+     msgTemplate={msgTemplate}
+     setMsgTemplate={setMsgTemplate}
+     onClose={() => setShowMsgTemplateConfig(false)}
+   />
+ )}
+
  {showQuickClient && (
    <QuickClientModal
      onClose={() => setShowQuickClient(false)}
      clients={clients}
      setClients={setClients}
+     user={user}
+     activeSedeId={activeSedeId}
      onCreated={() => { setShowQuickClient(false); setView("clients"); }}
      onCreateSale={(client) => {
        setShowQuickClient(false);
@@ -2765,12 +3501,14 @@ function AuthenticatedApp({
      perm={perm}
      customModules={customModules}
      modules={modules}
+     user={user}
+     activeSedeId={activeSedeId}
      onCreated={(code, destination, clientId, client) => {
        setCompleteClient(null);
        if (destination === "vet")          { setView("vet"); return; }
        if (destination === "grooming-ops") { setView("grooming-ops"); return; }
        if (destination === "sales")        {
-         // "Crear factura": preseleccionar el tutor y abrir SaleBuilder.
+         // "Crear recibo": preseleccionar el tutor y abrir SaleBuilder.
          const target = client || (clientId ? clients.find(c => c.id === clientId) : null);
          if (target) setPreselectedSaleClient(target);
          setView("new-service");
@@ -2804,7 +3542,10 @@ function AuthenticatedApp({
 // Página dedicada que se muestra cuando el usuario hace click en el engranaje de la sidebar.
 // Lista todas las secciones de ajustes en cards grandes para fácil acceso.
 // Filtra por permisos del rol — el super ve todo, los demás según `can()`.
-function SettingsHubView({ role, can, onNavigate }) {
+function SettingsHubView({ role, can, permissions = {}, onNavigate }) {
+  // Helper: ¿el rol tiene este permiso visible?
+  const hasFieldPerm = (crmId, sectionId, fieldId) =>
+    role === "super" || getFieldLevel(permissions, role, crmId, sectionId, fieldId) !== "hidden";
   // Catálogo de secciones de ajustes con sus permisos requeridos.
   const allSections = [
     {
@@ -2817,14 +3558,17 @@ function SettingsHubView({ role, can, onNavigate }) {
       visible: () => can("inventory") || can("vet-catalog") || can("grooming") || role === "super",
     },
     {
-      id: "manager",
-      label: "Módulos",
-      icon: LayoutGrid,
-      desc: "Configura los módulos activos del sistema y sus categorías.",
-      accent: "from-purple-100 to-pink-100",
-      iconColor: "text-purple-700",
+      id: "inventory-mgmt",
+      label: "Inventario",
+      icon: Archive,
+      desc: "Stock de productos e insumos por SKU, sede y CRM.",
+      accent: "from-cyan-100 to-blue-100",
+      iconColor: "text-cyan-700",
       visible: () => role === "super",
     },
+    // Antes había un card "Módulos" aquí. Se removió porque ya existe el botón
+    // "Ajuste de CRM" dentro del hub del CRM, que es contextual a la sede activa.
+    // Tener dos accesos para lo mismo confunde al usuario.
     {
       id: "roles",
       label: "Roles & permisos",
@@ -2860,6 +3604,33 @@ function SettingsHubView({ role, can, onNavigate }) {
       accent: "from-rose-100 to-orange-100",
       iconColor: "text-rose-700",
       visible: () => role === "super",
+    },
+    {
+      id: "payment-methods",
+      label: "Métodos de pago",
+      icon: Wallet,
+      desc: "Configura qué métodos de cobro aparecen en el constructor de recibos.",
+      accent: "from-emerald-100 to-green-100",
+      iconColor: "text-emerald-700",
+      visible: () => hasFieldPerm("sales", "payment_methods", "config") || role === "super",
+    },
+    {
+      id: "analytics",
+      label: "Analíticas",
+      icon: BarChart3,
+      desc: "Indicadores de operación, finanzas, clientes y desempeño del equipo.",
+      accent: "from-violet-100 to-fuchsia-100",
+      iconColor: "text-violet-700",
+      visible: () => hasFieldPerm("config", "analytics", "view") || role === "super",
+    },
+    {
+      id: "manager",
+      label: "Ajuste de CRM",
+      icon: LayoutGrid,
+      desc: "Configura sedes, módulos CRM y crea nuevas plantillas.",
+      accent: "from-orange-100 to-amber-100",
+      iconColor: "text-orange-700",
+      visible: () => hasFieldPerm("config", "modules", "view-manager") || role === "super",
     },
   ];
 
@@ -2928,7 +3699,7 @@ function SettingsHubView({ role, can, onNavigate }) {
 }
 
 function SettingsMenu({ collapsed, view, setView, can, role }) {
-  const SETTINGS_VIEWS = ["settings-hub", "products", "roles", "client-settings", "agenda-settings", "inventory", "vet-catalog", "grooming", "manager"];
+  const SETTINGS_VIEWS = ["settings-hub", "products", "roles", "client-settings", "agenda-settings", "payment-methods", "inventory", "inventory-mgmt", "vet-catalog", "grooming", "manager", "analytics"];
   const isOnSettings = SETTINGS_VIEWS.includes(view);
   const [open, setOpen] = useState(isOnSettings);
 
@@ -2941,10 +3712,14 @@ function SettingsMenu({ collapsed, view, setView, can, role }) {
     subItems.push({ id: "products", icon: Package, label: "Productos", isActive: ["products","inventory","vet-catalog","grooming"].includes(view) });
   }
   if (role === "super") {
-    subItems.push({ id: "manager", icon: LayoutGrid, label: "Módulos", isActive: view === "manager" });
+    // Nota: el item "Módulos" se removió de aquí. El acceso al manager de CRMs
+    // ahora vive como botón "Ajuste de CRM" dentro del hub del CRM, contextual a la sede.
     subItems.push({ id: "roles", icon: ShieldCheck, label: "Roles & permisos", isActive: view === "roles" });
     subItems.push({ id: "client-settings", icon: Users, label: "Ajuste de clientes", isActive: view === "client-settings" });
     subItems.push({ id: "agenda-settings", icon: Calendar, label: "Ajuste de agenda", isActive: view === "agenda-settings" });
+    subItems.push({ id: "payment-methods", icon: Wallet, label: "Métodos de pago", isActive: view === "payment-methods" });
+    subItems.push({ id: "inventory-mgmt", icon: Archive, label: "Inventario", isActive: view === "inventory-mgmt" });
+    subItems.push({ id: "analytics", icon: BarChart3, label: "Analíticas", isActive: view === "analytics" });
   }
   if (subItems.length === 0) return null;
 
@@ -3029,7 +3804,6 @@ function SettingsMenu({ collapsed, view, setView, can, role }) {
 }
 
 function Sidebar({ view, setView, customModules, passportsCount, onNewClientQuick, onNewClientFull, user, onLogout, permissions, unreadMessagesCount, petUpdates = [], collapsed = false, onToggleCollapsed }) {
- const [showNewClientMenu, setShowNewClientMenu] = useState(false);
  const role = user?.role;
  const perm = permissions[role] || {};
  const can = (v) => canAccess(perm, v);
@@ -3099,19 +3873,16 @@ function Sidebar({ view, setView, customModules, passportsCount, onNewClientQuic
      <div className="flex-1 min-w-0">
        {/* Wordmark con paths reales del logo, en gris claro para contraste sobre el fondo oscuro */}
        <CricketWordmark color="#e7e5e4" height={22} />
-       <div className="text-[9px] tracking-[0.2em] text-orange-400 uppercase font-semibold mt-1">
-         Pet System
-       </div>
      </div>
    )}
  </button>
 
  <nav className="p-3 flex-1 space-y-0.5">
  {/* === 1. DASHBOARD === */}
- {can("dashboard") && <NavItem icon={LayoutDashboard} label="Dashboard" active={view === "dashboard"} onClick={() => setView("dashboard")} />}
+ {can("dashboard") && <NavItem icon={Activity} label="Dashboard" active={view === "dashboard"} onClick={() => setView("dashboard")} />}
 
  {/* === 2. AGENDA === */}
- {can("agenda") && <NavItem icon={Calendar} label="Agenda" badge={{ value: 12 }} active={view === "agenda"} onClick={() => setView("agenda")} />}
+ {can("agenda") && <NavItem icon={Calendar} label="Agenda" active={view === "agenda"} onClick={() => setView("agenda")} />}
 
  {/* === 3. MENSAJES === */}
  {can("messages") && <NavItem icon={MessageCircle} label="Mensajes" badge={unreadMessagesCount > 0 ? { value: unreadMessagesCount } : null} active={view === "messages"} onClick={() => setView("messages")} />}
@@ -3121,7 +3892,6 @@ function Sidebar({ view, setView, customModules, passportsCount, onNewClientQuic
    <NavItem
      icon={LayoutGrid}
      label="CRM"
-     badge={{ value: (can("vet") ? 6 : 0) + (can("grooming-ops") ? 5 : 0) || null, soft: true }}
      active={["crm","vet","grooming-ops","grooming","standard","manager"].includes(view)}
      onClick={() => setView("crm")}
    />
@@ -3133,67 +3903,13 @@ function Sidebar({ view, setView, customModules, passportsCount, onNewClientQuic
      <NavItem
        icon={Users}
        label="Clientes"
-       badge={petUpdates.filter(u => u.status === "pending").length > 0 ? { value: petUpdates.filter(u => u.status === "pending").length, soft: true } : null}
        active={["clients","passport","vet-passport"].includes(view)}
        onClick={() => setView("clients")}
      />
 
-     {/* CTA Nuevo cliente — sólo para roles que pueden crear clientes */}
-     {perm.canCreateClient && (
-       collapsed ? (
-         <button
-           onClick={() => onNewClientQuick && onNewClientQuick()}
-           title="Nuevo cliente (registro rápido)"
-           className="my-1 w-full h-10 rounded-lg bg-gradient-to-br from-orange-500 to-orange-700 text-white grid place-items-center shadow-lg hover:-translate-y-0.5 transition"
-         >
-           <Plus size={18} strokeWidth={2.6} />
-         </button>
-       ) : (
-         <div className="relative my-1">
-           <button
-             onClick={() => setShowNewClientMenu(v => !v)}
-             className="flex items-center gap-2.5 w-full px-3 py-2.5 rounded-lg bg-gradient-to-br from-orange-500 to-orange-700 text-white text-sm font-semibold shadow-lg hover:-translate-y-0.5 transition relative overflow-hidden"
-           >
-             <span className="w-5 h-5 rounded-md bg-stone-700 grid place-items-center flex-shrink-0">
-               <Plus size={13} strokeWidth={2.6} />
-             </span>
-             <span>Nuevo cliente</span>
-             <ChevronDown size={13} className={`ml-auto transition-transform ${showNewClientMenu ? "rotate-180" : ""}`} />
-           </button>
-           {showNewClientMenu && (
-             <>
-               <div onClick={() => setShowNewClientMenu(false)} className="fixed inset-0 z-30"></div>
-               <div className="absolute left-0 right-0 mt-1 bg-white border border-stone-200 rounded-xl shadow-2xl z-40 overflow-hidden">
-                 <button
-                   onClick={() => { setShowNewClientMenu(false); onNewClientQuick && onNewClientQuick(); }}
-                   className="w-full flex items-start gap-3 p-3 hover:bg-orange-50 transition text-left border-b border-stone-100"
-                 >
-                   <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 grid place-items-center flex-shrink-0">
-                     <Zap size={14} strokeWidth={2} />
-                   </div>
-                   <div className="flex-1 min-w-0">
-                     <div className="font-semibold text-sm text-stone-900">Registro rápido</div>
-                     <div className="text-xs text-stone-500 mt-0.5 leading-snug">Solo cédula, teléfono y dirección. 30 segundos.</div>
-                   </div>
-                 </button>
-                 <button
-                   onClick={() => { setShowNewClientMenu(false); onNewClientFull && onNewClientFull(); }}
-                   className="w-full flex items-start gap-3 p-3 hover:bg-orange-50 transition text-left"
-                 >
-                   <div className="w-8 h-8 rounded-lg bg-orange-100 text-orange-700 grid place-items-center flex-shrink-0">
-                     <Stethoscope size={14} strokeWidth={2} />
-                   </div>
-                   <div className="flex-1 min-w-0">
-                     <div className="font-semibold text-sm text-stone-900">Ficha clínica completa</div>
-                     <div className="text-xs text-stone-500 mt-0.5 leading-snug">Cliente + mascota + historia clínica inicial.</div>
-                   </div>
-                 </button>
-               </div>
-             </>
-           )}
-         </div>
-       )
-     )}
+     {/* Item Clientes — sin CTA flotante. El "Nuevo cliente" se mudó a la
+         propia vista de Clientes (ClientsView) como dropdown nativo del listado,
+         siguiendo el patrón de "acciones donde corresponden al contenido". */}
    </>
  )}
 
@@ -3213,7 +3929,7 @@ function Sidebar({ view, setView, customModules, passportsCount, onNewClientQuic
    <button
      onClick={() => setView("profile")}
      className={`${collapsed ? "p-0" : "p-4"} flex items-center ${collapsed ? "justify-center" : "gap-2.5"} w-full hover:bg-stone-800 transition text-left ${collapsed ? "rounded-lg" : ""}`}
-     title={collapsed ? `${user?.name || "Invitado"} — Mi perfil` : "Mi perfil"}
+     title={collapsed ? `${[user?.title, user?.name].filter(Boolean).join(" ") || "Invitado"} — Mi perfil` : "Mi perfil"}
    >
      <div className={`w-9 h-9 rounded-full grid place-items-center text-white text-xs font-bold border-2 flex-shrink-0 transition ${
        view === "profile" ? "border-orange-500 bg-gradient-to-br from-orange-400 to-orange-600" : "border-stone-800 bg-gradient-to-br from-orange-500 to-orange-700"
@@ -3223,7 +3939,9 @@ function Sidebar({ view, setView, customModules, passportsCount, onNewClientQuic
      {!collapsed && (
        <>
          <div className="flex-1 min-w-0">
-           <div className="text-xs font-semibold text-stone-100 truncate">{user?.name || "Invitado"}</div>
+           <div className="text-xs font-semibold text-stone-100 truncate">
+             {[user?.title, user?.name].filter(Boolean).join(" ") || "Invitado"}
+           </div>
            <div className="text-xs text-stone-500 tracking-wide">{user?.roleLabel || ""}</div>
          </div>
          <span
@@ -3257,7 +3975,7 @@ function Sidebar({ view, setView, customModules, passportsCount, onNewClientQuic
 
 function Topbar({ view, proposalsCount = 0, onOpenProposals, canSeeProposals = true, onToggleSidebar, sidebarCollapsed = false }) {
  const titles = {
- manager: { crumb: "CRM Modular", here: "Catálogo de módulos", title: <>Módulos <span className="italic text-orange-600">de relación</span></> },
+ manager: { crumb: "CRM Modular", here: "Catálogo de CRMs", title: <>Relación <span className="italic text-orange-600">de CRMs</span></> },
  crm: { crumb: "CRM", here: "Operación", title: <>CRM <span className="italic text-orange-600">unificado</span></> },
  vet: { crumb: "CRM", here: "Veterinaria", title: <>Clínica <span className="italic text-orange-600">veterinaria</span></> },
  "vet-passport": { crumb: "Clientes", here: "Pasaporte clínico", title: <>Pasaporte <span className="italic text-orange-600">clínico</span></> },
@@ -3274,12 +3992,14 @@ function Topbar({ view, proposalsCount = 0, onOpenProposals, canSeeProposals = t
  dashboard: { crumb: "General", here: "Dashboard", title: <>Panorama <span className="italic text-orange-600">general</span></> },
  agenda: { crumb: "General", here: "Agenda", title: <>Agenda <span className="italic text-orange-600">unificada</span></> },
  messages: { crumb: "General", here: "Mensajes", title: <>Bandeja de <span className="italic text-orange-600">conversaciones</span></> },
- sales: { crumb: "Operación", here: "Ventas", title: <>Ventas <span className="italic text-orange-600">y facturación</span></> },
+ sales: { crumb: "Operación", here: "Ventas", title: <>Ventas <span className="italic text-orange-600">y recibos</span></> },
  "new-service": { crumb: "Operación", here: "Nueva venta", title: <>Nueva <span className="italic text-orange-600">venta</span></> },
  inventory: { crumb: "Ajustes · Productos", here: "Inventario", title: <>Inventario <span className="italic text-orange-600">y stock</span></> },
+ "inventory-mgmt": { crumb: "Ajustes", here: "Inventario", title: <>Inventario <span className="italic text-orange-600">de productos e insumos</span></> },
  products: { crumb: "Ajustes", here: "Productos", title: <>Inventario <span className="italic text-orange-600">y catálogos</span></> },
  "client-settings": { crumb: "Ajustes", here: "Ajuste de clientes", title: <>Configuración <span className="italic text-orange-600">de clientes</span></> },
  "agenda-settings": { crumb: "Ajustes", here: "Ajuste de agenda", title: <>Configuración <span className="italic text-orange-600">de agenda</span></> },
+ "payment-methods": { crumb: "Ajustes", here: "Métodos de pago", title: <>Métodos <span className="italic text-orange-600">de pago</span></> },
  reports: { crumb: "Ajustes", here: "Reportes", title: <>Reportes <span className="italic text-orange-600">y BI</span></> },
  config: { crumb: "Ajustes", here: "Configuración", title: <>Configuración <span className="italic text-orange-600">del sistema</span></> },
  };
@@ -3334,7 +4054,89 @@ function Topbar({ view, proposalsCount = 0, onOpenProposals, canSeeProposals = t
 
 // ========== VISTA: GESTOR DE MÓDULOS ==========
 
-function ModulesManager({ onOpenModule, onCreateModule, customModules, modules = [], setModules, userName, onRemoveModule, onReinstallModule, onRenameModule }) {
+function ModulesManager({ onOpenModule, onCreateModule, customModules, modules = [], setModules, userName, onRemoveModule, onReinstallModule, onRenameModule, sedes = [], setSedes = null }) {
+ // === Estado para renombrar/crear sedes ===
+ const [renamingSedeId, setRenamingSedeId] = useState(null);
+ const [renameSedeValue, setRenameSedeValue] = useState("");
+ // Edición de descripción de sede (texto que se muestra en el modal de cita pública)
+ const [editingDescSedeId, setEditingDescSedeId] = useState(null);
+ const [editingDescValue, setEditingDescValue] = useState("");
+ const [creatingSede, setCreatingSede] = useState(false);
+ const [newSedeName, setNewSedeName] = useState("");
+ // Modal de confirmación al cambiar sede de un CRM existente.
+ // Vive aquí (en el manager, no en el card) para escapar del overflow-hidden y
+ // del transform del card que rompen position:fixed cuando el modal está adentro.
+ const [sedeChangeRequest, setSedeChangeRequest] = useState(null); // { moduleId, moduleName, newSedeId }
+
+ // === Crear sede + auto-instalar módulos estándar ===
+ // Cuando se crea una sede nueva, automáticamente se instalan los módulos
+ // Veterinaria y Grooming con la misma configuración (features, cardFields,
+ // columnas, etc.) que tiene Pet 1. Esto garantiza que cualquier sucursal
+ // nueva tenga paridad funcional desde el día 1.
+ // Ventas (Sales) es global, no por sede, así que automáticamente filtra los
+ // recibos de la nueva sede sin que haya que instalarla.
+ const createSedeWithModules = (sedeName) => {
+   const sedeId = `sede-${Date.now().toString(36)}`;
+   const stamp = Date.now().toString(36);
+
+   // 1. Crear la sede
+   setSedes && setSedes(prev => [...prev, {
+     id: sedeId,
+     name: sedeName,
+     description: "Sucursal de Cricket.",
+     active: true,
+     isDefault: false,
+   }]);
+
+   // 2. Auto-instalar Vet y Grooming con defaults estándar.
+   //    Si el admin no quiere alguno, lo puede remover (soft-delete) luego.
+   if (setModules) {
+     const vetDefaults = getModuleDefaults("vet");
+     const groomingDefaults = getModuleDefaults("grooming");
+     setModules(prev => [
+       ...prev,
+       {
+         id: `vet-${stamp}`,
+         kind: "vet",
+         sedeId,
+         name: "Clínica Veterinaria",
+         shortName: "Veterinaria",
+         role: vetDefaults.role,
+         tone: vetDefaults.tone,
+         accent: vetDefaults.accent,
+         icon: vetDefaults.icon,
+         description: vetDefaults.description,
+         meta: vetDefaults.meta,
+         columns: vetDefaults.columns,
+         features: vetDefaults.features,
+         cardFields: vetDefaults.cardFields,
+         core: false,
+         removed: false,
+         createdAt: new Date().toISOString(),
+       },
+       {
+         id: `grooming-${stamp}`,
+         kind: "grooming",
+         sedeId,
+         name: "Atención Grooming",
+         shortName: "Grooming",
+         role: groomingDefaults.role,
+         tone: groomingDefaults.tone,
+         accent: groomingDefaults.accent,
+         icon: groomingDefaults.icon,
+         description: groomingDefaults.description,
+         meta: groomingDefaults.meta,
+         columns: groomingDefaults.columns,
+         features: groomingDefaults.features,
+         cardFields: groomingDefaults.cardFields,
+         core: false,
+         removed: false,
+         createdAt: new Date().toISOString(),
+       },
+     ]);
+   }
+ };
+
  // Resolver el icono de un módulo desde su string id (porque modules guarda nombre, no componente).
  const ICONS = { Stethoscope, Bath, Tag, LayoutGrid, Heart, Scissors, Sparkles, PawPrint };
  const resolveIcon = (iconName, fallback = LayoutGrid) => ICONS[iconName] || fallback;
@@ -3375,6 +4177,7 @@ function ModulesManager({ onOpenModule, onCreateModule, customModules, modules =
    });
    // Plantilla "estándar custom" siempre presente para crear nuevos
    list.push({ id: "tpl-custom", icon: LayoutGrid, name: "Personalizado", description: "CRM genérico configurable con campos y reglas de pipeline propias.", installed: false, custom: true });
+   list.push({ id: "tpl-lab", icon: FlaskConical, name: "Laboratorio", description: "Gestión de órdenes de laboratorio: solicitud, toma de muestra, procesamiento y entrega de resultados.", installed: true, underConstruction: true });
    list.push({ id: "tpl-daycare", icon: Heart, name: "Guardería", description: "Reservas por día, control de estancia, fotos diarias.", installed: false, soon: true });
    return list;
    // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3402,10 +4205,10 @@ function ModulesManager({ onOpenModule, onCreateModule, customModules, modules =
  Cricket · Arquitectura modular
  </div>
  <h2 className="font-serif text-3xl font-semibold leading-tight mb-2">
- Cada módulo crea su <em className="text-orange-700 not-italic">propio rol</em>
+ Cada CRM crea su <em className="text-orange-700 not-italic">propio rol</em>
  </h2>
  <p className="text-stone-600 leading-relaxed max-w-xl">
- Activa solo los módulos que tu tienda necesita. <strong>Ventas, Clientes y Agenda</strong> son el tronco fijo del sistema. Los demás son ramas que puedes instalar, renombrar o eliminar.
+ Activa solo los CRMs que tu tienda necesita. <strong>Ventas, Clientes y Agenda</strong> son el tronco fijo del sistema. Los demás son ramas que puedes instalar, renombrar o eliminar.
  </p>
  </div>
  <div className="flex gap-2.5 flex-wrap">
@@ -3416,18 +4219,226 @@ function ModulesManager({ onOpenModule, onCreateModule, customModules, modules =
  </div>
  </div>
 
+ {/* === Sección: Sedes (sucursales) === */}
+ {setSedes && (
+   <section>
+     <SectionHeading eyebrow="Multi-empresas" title="Sedes" />
+     <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
+       <div className="divide-y divide-stone-100">
+         {(sedes || []).map(sede => {
+           const sedeModules = (modules || []).filter(m => m.sedeId === sede.id && !m.removed);
+           const moduleCount = sedeModules.length;
+           return (
+             <div key={sede.id} className="p-4 hover:bg-stone-50 transition">
+               <div className="flex items-center gap-3 flex-wrap">
+                 <div className="w-10 h-10 rounded-xl bg-orange-100 text-orange-700 grid place-items-center flex-shrink-0">
+                   <MapPin size={17} />
+                 </div>
+                 <div className="flex-1 min-w-0">
+                 {renamingSedeId === sede.id ? (
+                   <div className="flex items-center gap-2">
+                     <input
+                       autoFocus
+                       value={renameSedeValue}
+                       onChange={(e) => setRenameSedeValue(e.target.value)}
+                       onKeyDown={(e) => {
+                         if (e.key === "Enter" && renameSedeValue.trim()) {
+                           setSedes(prev => prev.map(s => s.id === sede.id ? { ...s, name: renameSedeValue.trim() } : s));
+                           setRenamingSedeId(null);
+                         } else if (e.key === "Escape") {
+                           setRenamingSedeId(null);
+                         }
+                       }}
+                       className="px-3 py-1.5 border border-orange-400 rounded-lg text-sm outline-none focus:ring-2 focus:ring-orange-200"
+                     />
+                     <button
+                       onClick={() => {
+                         if (renameSedeValue.trim()) {
+                           setSedes(prev => prev.map(s => s.id === sede.id ? { ...s, name: renameSedeValue.trim() } : s));
+                           setRenamingSedeId(null);
+                         }
+                       }}
+                       className="px-2 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white"
+                     >
+                       <Check size={13} />
+                     </button>
+                     <button onClick={() => setRenamingSedeId(null)} className="px-2 py-1.5 rounded-lg bg-stone-200 hover:bg-stone-300 text-stone-700">
+                       <X size={13} />
+                     </button>
+                   </div>
+                 ) : (
+                   <div className="flex items-center gap-2 flex-wrap">
+                     <span className="font-semibold text-sm">{sede.name}</span>
+                     {sede.isDefault && (
+                       <span className="text-[10px] font-bold uppercase px-1.5 py-px rounded bg-orange-100 text-orange-700">
+                         Principal
+                       </span>
+                     )}
+                     <span className="text-xs text-stone-500">· {moduleCount} {moduleCount === 1 ? "CRM" : "CRMs"}</span>
+                   </div>
+                 )}
+                 {/* Descripción: texto que se ve en el modal de cita pública.
+                     Editable inline con un click. Va FUERA del ternario de renombrado
+                     porque la descripción es independiente del estado de edición del nombre. */}
+                 {renamingSedeId !== sede.id && (
+                   editingDescSedeId === sede.id ? (
+                     <div className="flex items-center gap-2 mt-1.5">
+                       <input
+                         autoFocus
+                         value={editingDescValue}
+                         onChange={(e) => setEditingDescValue(e.target.value)}
+                         placeholder="Ej: Sede principal, abierta lun-sáb 8h-18h"
+                         onKeyDown={(e) => {
+                           if (e.key === "Enter") {
+                             setSedes(prev => prev.map(s => s.id === sede.id ? { ...s, description: editingDescValue.trim() } : s));
+                             setEditingDescSedeId(null);
+                           } else if (e.key === "Escape") {
+                             setEditingDescSedeId(null);
+                           }
+                         }}
+                         className="flex-1 px-2 py-1 border border-orange-400 rounded-md text-xs outline-none focus:ring-2 focus:ring-orange-200"
+                       />
+                       <button
+                         onClick={() => {
+                           setSedes(prev => prev.map(s => s.id === sede.id ? { ...s, description: editingDescValue.trim() } : s));
+                           setEditingDescSedeId(null);
+                         }}
+                         className="px-2 py-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white"
+                       >
+                         <Check size={11} />
+                       </button>
+                       <button onClick={() => setEditingDescSedeId(null)} className="px-2 py-1 rounded-md bg-stone-200 hover:bg-stone-300 text-stone-700">
+                         <X size={11} />
+                       </button>
+                     </div>
+                   ) : (
+                     <button
+                       onClick={() => { setEditingDescSedeId(sede.id); setEditingDescValue(sede.description || ""); }}
+                       className="text-xs text-stone-500 mt-1 italic hover:text-orange-700 transition flex items-center gap-1 text-left"
+                       title="Editar descripción (se muestra al cliente al agendar)"
+                     >
+                       {sede.description || <span className="text-stone-400">+ Agregar descripción</span>}
+                       <Edit3 size={9} className="inline" />
+                     </button>
+                   )
+                 )}
+               </div>
+               {renamingSedeId !== sede.id && (
+                 <div className="flex items-center gap-1">
+                   <button
+                     onClick={() => { setRenamingSedeId(sede.id); setRenameSedeValue(sede.name); }}
+                     title="Renombrar sede"
+                     className="px-2.5 py-1.5 rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-semibold flex items-center gap-1"
+                   >
+                     <Edit3 size={11} /> Renombrar
+                   </button>
+                   {!sede.isDefault && (
+                     <button
+                       onClick={() => {
+                         if (moduleCount > 0) {
+                           alert(`No se puede eliminar "${sede.name}" porque tiene ${moduleCount} CRM(s) activo(s). Elimina o reasigna primero esos CRMs.`);
+                           return;
+                         }
+                         if (confirm(`¿Eliminar la sede "${sede.name}"? Esta acción no se puede deshacer.`)) {
+                           setSedes(prev => prev.filter(s => s.id !== sede.id));
+                         }
+                       }}
+                       title="Eliminar sede"
+                       className="px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold flex items-center gap-1"
+                     >
+                       <Trash2 size={11} />
+                     </button>
+                   )}
+                 </div>
+               )}
+               </div>
+               {/* Chips de CRMs asignados a esta sede.
+                   Muestra el nombre de cada CRM con su acento de color. */}
+               {sedeModules.length > 0 && (
+                 <div className="mt-3 ml-13 flex flex-wrap gap-1.5" style={{ paddingLeft: "52px" }}>
+                   {sedeModules.map(m => {
+                     const colorClass = m.kind === "vet" ? "bg-orange-100 text-orange-800 border-orange-200" :
+                                         m.kind === "grooming" ? "bg-emerald-100 text-emerald-800 border-emerald-200" :
+                                         m.kind === "standard" ? "bg-blue-100 text-blue-800 border-blue-200" :
+                                         "bg-stone-100 text-stone-700 border-stone-200";
+                     return (
+                       <span
+                         key={m.id}
+                         className={`text-xs font-semibold px-2 py-1 rounded-md border ${colorClass}`}
+                         title={m.description}
+                       >
+                         {m.name}
+                       </span>
+                     );
+                   })}
+                 </div>
+               )}
+             </div>
+           );
+         })}
+         {/* Crear nueva sede */}
+         {creatingSede ? (
+           <div className="p-4 flex items-center gap-2 bg-orange-50">
+             <MapPin size={17} className="text-orange-700 flex-shrink-0" />
+             <input
+               autoFocus
+               value={newSedeName}
+               onChange={(e) => setNewSedeName(e.target.value)}
+               onKeyDown={(e) => {
+                 if (e.key === "Enter" && newSedeName.trim()) {
+                   createSedeWithModules(newSedeName.trim());
+                   setCreatingSede(false);
+                   setNewSedeName("");
+                 } else if (e.key === "Escape") {
+                   setCreatingSede(false);
+                   setNewSedeName("");
+                 }
+               }}
+               placeholder="Nombre de la sede..."
+               className="flex-1 px-3 py-1.5 border border-orange-400 rounded-lg text-sm outline-none focus:ring-2 focus:ring-orange-200"
+             />
+             <button
+               onClick={() => {
+                 if (newSedeName.trim()) {
+                   createSedeWithModules(newSedeName.trim());
+                   setCreatingSede(false);
+                   setNewSedeName("");
+                 }
+               }}
+               className="px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold"
+             >
+               Crear
+             </button>
+             <button onClick={() => { setCreatingSede(false); setNewSedeName(""); }} className="px-2 py-1.5 rounded-lg bg-stone-200 hover:bg-stone-300 text-stone-700">
+               <X size={13} />
+             </button>
+           </div>
+         ) : (
+           <button
+             onClick={() => setCreatingSede(true)}
+             className="w-full p-4 flex items-center justify-center gap-2 text-sm font-semibold text-orange-700 hover:bg-orange-50 transition"
+           >
+             <Plus size={15} strokeWidth={2.4} />
+             Agregar nueva sede
+           </button>
+         )}
+       </div>
+     </div>
+   </section>
+ )}
+
  {/* Active modules */}
  <section>
- <SectionHeading eyebrow="Activos en tu tienda" title="Módulos en operación" />
+ <SectionHeading eyebrow="Activos en tu tienda" title="CRMs en operación" />
  {installedModules.length === 0 && (customModules || []).length === 0 ? (
    <div className="bg-white border-2 border-dashed border-stone-300 rounded-2xl p-10 text-center">
      <div className="w-14 h-14 rounded-xl bg-stone-100 grid place-items-center text-stone-500 mx-auto mb-4">
        <LayoutGrid size={24} strokeWidth={1.6} />
      </div>
-     <h3 className="font-serif text-lg font-semibold mb-1">Sin módulos activos</h3>
+     <h3 className="font-serif text-lg font-semibold mb-1">Sin CRMs activos</h3>
      <p className="text-sm text-stone-600 max-w-md mx-auto">
        El tronco del sistema (Ventas, Clientes, Agenda, Mensajes) sigue funcionando.
-       Instala módulos desde el catálogo de abajo para gestionar operaciones específicas.
+       Instala CRMs desde el catálogo de abajo para gestionar operaciones específicas.
      </p>
    </div>
  ) : (
@@ -3446,6 +4457,17 @@ function ModulesManager({ onOpenModule, onCreateModule, customModules, modules =
        tone: m.tone || "from-stone-100 to-stone-50 text-stone-700",
        meta: m.meta || [],
        custom: !m.core,
+       sedeId: m.sedeId,
+     }}
+     sedes={sedes}
+     onChangeSede={(newSedeId, needsConfirm) => {
+       // Si no necesita confirmación (primera asignación), aplicar directo
+       if (!needsConfirm) {
+         setModules(prev => prev.map(mod => mod.id === m.id ? { ...mod, sedeId: newSedeId } : mod));
+         return;
+       }
+       // Si necesita confirmación, abrimos modal a nivel manager (no del card)
+       setSedeChangeRequest({ moduleId: m.id, moduleName: m.name, newSedeId });
      }}
      onOpen={() => onOpenModule(m.id)}
      onRename={() => setRenamingId(m.id)}
@@ -3458,7 +4480,7 @@ function ModulesManager({ onOpenModule, onCreateModule, customModules, modules =
  key={m.id}
  module={{
  id: m.id, icon: Sparkles, name: m.name,
- description: `Módulo personalizado · ${m.fields.length} campos configurados.`,
+ description: `CRM personalizado · ${m.fields.length} campos configurados.`,
  role: m.role, users: 0, records: 0,
  tone: "from-orange-100 to-orange-50 text-orange-800",
  meta: m.fields.slice(0, 3).map(f => f.label),
@@ -3473,7 +4495,7 @@ function ModulesManager({ onOpenModule, onCreateModule, customModules, modules =
 
  {/* Catalog */}
  <section>
- <SectionHeading eyebrow="Biblioteca de plantillas" title="Catálogo de módulos" />
+ <SectionHeading eyebrow="Biblioteca de plantillas" title="Catálogo de CRMs" />
  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
  {catalog.map(c => (
  <TemplateCard
@@ -3535,11 +4557,67 @@ function ModulesManager({ onOpenModule, onCreateModule, customModules, modules =
      }}
    />
  )}
+
+ {/* === Modal de confirmación al cambiar de sede a un CRM existente ===
+     Vive aquí en el ModulesManager (no en cada card) por dos razones:
+     1) Las cards tienen overflow-hidden + hover:translate que rompen position:fixed
+        cuando el modal está adentro — el modal "salta" o queda recortado.
+     2) Centralizar el modal evita duplicación si hay 5 CRMs en pantalla. */}
+ {sedeChangeRequest && (
+   <div
+     onClick={() => setSedeChangeRequest(null)}
+     className="fixed inset-0 bg-stone-900/80 z-[100] flex justify-center items-center p-4"
+   >
+     <div
+       onClick={(e) => e.stopPropagation()}
+       className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden"
+     >
+       <div className="p-5 border-b border-stone-200 bg-amber-50 flex items-center gap-3">
+         <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 grid place-items-center flex-shrink-0">
+           <AlertTriangle size={18} />
+         </div>
+         <div>
+           <div className="text-xs tracking-widest uppercase text-amber-700 font-semibold">Confirmación</div>
+           <h3 className="font-serif text-lg font-semibold">¿Cambiar de sede?</h3>
+         </div>
+       </div>
+       <div className="p-5 space-y-3 text-sm text-stone-700">
+         <p>
+           Estás a punto de mover <strong>{sedeChangeRequest.moduleName}</strong> a otra sede.
+         </p>
+         <p>
+           Esto puede generar inconvenientes: las <strong>recibos, pacientes y citas existentes</strong> quedarán asignadas a la sede anterior y no se moverán automáticamente.
+         </p>
+         <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 text-xs text-orange-900">
+           💡 Es mejor opción crear un CRM nuevo en la otra sede para mantener los datos limpios.
+         </div>
+       </div>
+       <div className="p-4 border-t border-stone-200 flex gap-2 bg-stone-50">
+         <button
+           onClick={() => setSedeChangeRequest(null)}
+           className="flex-1 px-4 py-2.5 rounded-xl bg-white border border-stone-200 hover:border-stone-400 text-stone-700 text-sm font-semibold transition"
+         >
+           Cancelar
+         </button>
+         <button
+           onClick={() => {
+             const { moduleId, newSedeId } = sedeChangeRequest;
+             setModules(prev => prev.map(mod => mod.id === moduleId ? { ...mod, sedeId: newSedeId } : mod));
+             setSedeChangeRequest(null);
+           }}
+           className="flex-1 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold transition"
+         >
+           Cambiar igual
+         </button>
+       </div>
+     </div>
+   </div>
+ )}
  </div>
  );
 }
 
-// ========== MODAL: Eliminar módulo (flujo de 3 pasos de confirmación) ==========
+// ========== MODAL: Eliminar CRM (flujo de 3 pasos de confirmación) ==========
 // Pide confirmación explícita en 3 ventanas distintas. Cada una clarifica una capa
 // distinta de las consecuencias para que el usuario no presione por accidente.
 function RemoveModuleModal({ module, onCancel, onConfirm }) {
@@ -3565,7 +4643,7 @@ function RemoveModuleModal({ module, onCancel, onConfirm }) {
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-xs tracking-widest uppercase opacity-90 font-semibold">
-              Paso {step} de 3 · Eliminar módulo
+              Paso {step} de 3 · Eliminar CRM
             </div>
             <h3 className="font-serif text-xl font-semibold mt-0.5 truncate">
               {stepTitle}
@@ -3584,7 +4662,7 @@ function RemoveModuleModal({ module, onCancel, onConfirm }) {
           {step === 1 && (
             <>
               <p className="text-sm text-stone-700 leading-relaxed">
-                Estás a punto de eliminar el módulo <strong className="text-stone-900">{module.name}</strong>.
+                Estás a punto de eliminar el CRM <strong className="text-stone-900">{module.name}</strong>.
                 Esto implica:
               </p>
               <ul className="space-y-2 text-sm text-stone-700">
@@ -3604,13 +4682,13 @@ function RemoveModuleModal({ module, onCancel, onConfirm }) {
                   <span className="w-5 h-5 rounded-full bg-red-100 text-red-700 grid place-items-center flex-shrink-0 mt-0.5">
                     <X size={11} strokeWidth={2.5} />
                   </span>
-                  Los roles que dependían del módulo pierden acceso a sus vistas.
+                  Los roles que dependían del CRM pierden acceso a sus vistas.
                 </li>
                 <li className="flex items-start gap-2.5">
                   <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 grid place-items-center flex-shrink-0 mt-0.5">
                     <Check size={11} strokeWidth={2.5} />
                   </span>
-                  Si más adelante quieres recuperar el módulo, puedes <strong>reinstalarlo</strong> desde el catálogo.
+                  Si más adelante quieres recuperar el CRM, puedes <strong>reinstalarlo</strong> desde el catálogo.
                 </li>
               </ul>
             </>
@@ -3621,7 +4699,7 @@ function RemoveModuleModal({ module, onCancel, onConfirm }) {
               <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex items-start gap-2.5">
                 <BadgeCheck size={16} className="text-emerald-700 flex-shrink-0 mt-0.5" />
                 <div className="text-xs text-emerald-900 leading-relaxed">
-                  <strong>Tronco intacto.</strong> Eliminar este módulo NO borra Ventas, Clientes ni Agenda. Esos datos son del sistema.
+                  <strong>Tronco intacto.</strong> Eliminar este CRM NO borra Ventas, Clientes ni Agenda. Esos datos son del sistema.
                 </div>
               </div>
               <p className="text-sm text-stone-700 leading-relaxed">
@@ -3630,7 +4708,7 @@ function RemoveModuleModal({ module, onCancel, onConfirm }) {
               <ul className="space-y-1.5 text-sm text-stone-700 ml-1">
                 <li className="flex items-start gap-2.5">
                   <Check size={14} className="text-emerald-600 flex-shrink-0 mt-0.5" strokeWidth={2.5} />
-                  <span>Todas las facturas históricas asociadas al módulo</span>
+                  <span>Todas las recibos históricas asociadas al CRM</span>
                 </li>
                 <li className="flex items-start gap-2.5">
                   <Check size={14} className="text-emerald-600 flex-shrink-0 mt-0.5" strokeWidth={2.5} />
@@ -3646,7 +4724,7 @@ function RemoveModuleModal({ module, onCancel, onConfirm }) {
                 </li>
               </ul>
               <p className="text-sm text-stone-700 leading-relaxed pt-2">
-                Solo se elimina la <strong>operación viva</strong> del módulo: el kanban, sus drawers de atención y los eventos futuros del calendario.
+                Solo se elimina la <strong>operación viva</strong> del CRM: el kanban, sus drawers de atención y los eventos futuros del calendario.
               </p>
             </>
           )}
@@ -3665,19 +4743,19 @@ function RemoveModuleModal({ module, onCancel, onConfirm }) {
               <ul className="space-y-2 text-sm text-stone-700">
                 <li className="flex items-start gap-2.5">
                   <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-700 grid place-items-center flex-shrink-0 mt-0.5 text-xs font-bold">1</span>
-                  <span>Los servicios "Por hacer" y "En proceso" generan facturas concluidas en Ventas (con cinta <strong>"✓ Concluido"</strong>) usando precios del catálogo.</span>
+                  <span>Los servicios "Por hacer" y "En proceso" generan recibos concluidas en Ventas (con cinta <strong>"✓ Concluido"</strong>) usando precios del catálogo.</span>
                 </li>
                 <li className="flex items-start gap-2.5">
                   <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-700 grid place-items-center flex-shrink-0 mt-0.5 text-xs font-bold">2</span>
-                  <span>Las facturas con pago anticipado se marcan como concluidas — Ventas decide el cierre final.</span>
+                  <span>Las recibos con pago anticipado se marcan como concluidas — Ventas decide el cierre final.</span>
                 </li>
                 <li className="flex items-start gap-2.5">
                   <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-700 grid place-items-center flex-shrink-0 mt-0.5 text-xs font-bold">3</span>
-                  <span>Los eventos futuros del calendario asociados al módulo se eliminan (los pasados quedan).</span>
+                  <span>Los eventos futuros del calendario asociados al CRM se eliminan (los pasados quedan).</span>
                 </li>
                 <li className="flex items-start gap-2.5">
                   <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-700 grid place-items-center flex-shrink-0 mt-0.5 text-xs font-bold">4</span>
-                  <span>El módulo desaparece del sidebar y del hub. Los roles afectados quedan sin acceso a esa vista.</span>
+                  <span>El CRM desaparece del sidebar y del hub. Los roles afectados quedan sin acceso a esa vista.</span>
                 </li>
               </ul>
             </>
@@ -3714,7 +4792,7 @@ function RemoveModuleModal({ module, onCancel, onConfirm }) {
   );
 }
 
-// ========== MODAL: Renombrar módulo ==========
+// ========== MODAL: Renombrar CRM ==========
 function RenameModuleModal({ module, onCancel, onConfirm }) {
   const [name, setName] = useState(module.name || "");
   const trimmed = name.trim();
@@ -3729,7 +4807,7 @@ function RenameModuleModal({ module, onCancel, onConfirm }) {
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold">
-              Renombrar módulo
+              Renombrar CRM
             </div>
             <h3 className="font-serif text-lg font-semibold mt-0.5 truncate">{module.name}</h3>
           </div>
@@ -3740,7 +4818,7 @@ function RenameModuleModal({ module, onCancel, onConfirm }) {
 
         <div className="p-5 space-y-3">
           <p className="text-xs text-stone-600 leading-relaxed">
-            Cambia el nombre visible del módulo. Útil para personalizar (ej. "Peluquería Canina" en vez de "Atención Grooming") o traducir.
+            Cambia el nombre visible del CRM. Útil para personalizar (ej. "Peluquería Canina" en vez de "Atención Grooming") o traducir.
           </p>
           <div>
             <label className="text-xs tracking-widest uppercase text-stone-500 font-semibold block mb-1.5">
@@ -3902,7 +4980,7 @@ function ConfigureModuleModal({ module, onCancel, onConfirm }) {
       items: [
         { id: "floatingCalendar", label: "Calendario flotante",             desc: "Botón para abrir un calendario en ventana flotante." },
         { id: "chatWithTutor",    label: "Chat con tutor",                  desc: "Mensajería integrada en el drawer de atención." },
-        { id: "invoiceLink",      label: "Mostrar factura asociada",        desc: "Número de factura visible en cards y headers." },
+        { id: "invoiceLink",      label: "Mostrar recibo asociada",        desc: "Número de recibo visible en cards y headers." },
       ],
     },
   ];
@@ -3915,7 +4993,7 @@ function ConfigureModuleModal({ module, onCancel, onConfirm }) {
     { id: "age",           label: "Edad" },
     { id: "tutorName",     label: "Nombre del tutor" },
     { id: "time",          label: "Hora del servicio" },
-    { id: "invoiceNumber", label: "Número de factura" },
+    { id: "invoiceNumber", label: "Número de recibo" },
     { id: "statusBadge",   label: "Insumos / badges de estado" },
   ];
 
@@ -4259,20 +5337,27 @@ function SectionHeading({ eyebrow, title }) {
  );
 }
 
-function ActiveModuleCard({ module, onOpen, onRename, onRemove, onEditConfig }) {
+function ActiveModuleCard({ module, onOpen, onRename, onRemove, onEditConfig, sedes = [], onChangeSede }) {
  const { icon: Icon } = module;
  const [showMenu, setShowMenu] = useState(false);
+ const [showSedePicker, setShowSedePicker] = useState(false);
  // Click fuera del menú lo cierra
  useEffect(() => {
-   if (!showMenu) return;
-   const close = () => setShowMenu(false);
+   if (!showMenu && !showSedePicker) return;
+   const close = () => { setShowMenu(false); setShowSedePicker(false); };
    const t = setTimeout(() => document.addEventListener("click", close), 0);
    return () => { clearTimeout(t); document.removeEventListener("click", close); };
- }, [showMenu]);
+ }, [showMenu, showSedePicker]);
+
+ // Sede actual del CRM (si tiene)
+ const currentSede = (sedes || []).find(s => s.id === module.sedeId);
  return (
  <div className="relative bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden flex flex-col hover:-translate-y-0.5 hover:shadow-lg transition">
- <button
+ <div
  onClick={onOpen}
+ role="button"
+ tabIndex={0}
+ onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onOpen && onOpen(); }}
  className="text-left flex flex-col flex-1 cursor-pointer"
  >
  <div className={`bg-gradient-to-br ${module.tone} p-4 flex items-center gap-3 border-b border-stone-200`}>
@@ -4285,6 +5370,54 @@ function ActiveModuleCard({ module, onOpen, onRename, onRemove, onEditConfig }) 
  </div>
  {module.custom && <span className="text-xs font-bold uppercase tracking-wider px-2 py-1 rounded-full bg-orange-100 text-orange-800">Custom</span>}
  </div>
+
+ {/* Selector de sede del CRM — antes del cuerpo, debajo del header.
+     Visible solo si hay sedes configuradas y handler de cambio. */}
+ {sedes.length > 0 && onChangeSede && (
+   <div onClick={(e) => e.stopPropagation()} className="px-4 py-2 border-b border-stone-100 bg-stone-50 flex items-center gap-2 relative">
+     <MapPin size={12} className="text-stone-500 flex-shrink-0" />
+     <span className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold">Sede:</span>
+     <button
+       onClick={(e) => { e.stopPropagation(); setShowSedePicker(s => !s); }}
+       className="flex-1 flex items-center justify-between gap-1.5 text-xs font-semibold text-stone-700 hover:text-orange-700 transition"
+     >
+       <span className={currentSede ? "" : "text-stone-400 italic"}>
+         {currentSede ? currentSede.name : "Sin asignar"}
+       </span>
+       <ChevronDown size={12} className={`transition-transform ${showSedePicker ? "rotate-180" : ""}`} />
+     </button>
+     {showSedePicker && (
+       <div className="absolute top-full mt-1 left-0 right-0 mx-2 bg-white border border-stone-200 rounded-lg shadow-xl overflow-hidden z-20">
+         {sedes.map(sede => (
+           <button
+             key={sede.id}
+             onClick={(e) => {
+               e.stopPropagation();
+               // Si es la misma sede, solo cerrar
+               if (module.sedeId === sede.id) {
+                 setShowSedePicker(false);
+                 return;
+               }
+               // Delegamos al padre: él decide si pedir confirmación o aplicar directo.
+               // El segundo argumento indica si requiere confirmación (CRM ya tenía sede).
+               onChangeSede(sede.id, !!module.sedeId);
+               setShowSedePicker(false);
+             }}
+             className={`w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold transition text-left ${
+               module.sedeId === sede.id
+                 ? "bg-orange-50 text-orange-800"
+                 : "hover:bg-stone-50 text-stone-700"
+             }`}
+           >
+             <MapPin size={11} />
+             {sede.name}
+             {sede.isDefault && <span className="ml-auto text-[9px] uppercase font-bold bg-stone-100 px-1.5 rounded">Principal</span>}
+           </button>
+         ))}
+       </div>
+     )}
+   </div>
+ )}
 
  <div className="p-5 flex-1">
  <p className="text-sm text-stone-600 leading-relaxed mb-3">{module.description}</p>
@@ -4304,7 +5437,7 @@ function ActiveModuleCard({ module, onOpen, onRename, onRemove, onEditConfig }) 
  <ChevronRight size={16} className="text-orange-600" />
  </div>
  </div>
- </button>
+ </div>
 
  {/* Menú de acciones (esquina superior derecha) — solo si hay handlers */}
  {(onRename || onRemove || onEditConfig) && (
@@ -4342,7 +5475,7 @@ function ActiveModuleCard({ module, onOpen, onRename, onRemove, onEditConfig }) 
              className="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-red-700 hover:bg-red-50 text-left transition border-t border-stone-100"
            >
              <Trash2 size={13} />
-             Eliminar módulo
+             Eliminar CRM
            </button>
          )}
        </div>
@@ -4355,16 +5488,18 @@ function ActiveModuleCard({ module, onOpen, onRename, onRemove, onEditConfig }) 
 
 function TemplateCard({ template, onCreate, onReinstall, onConfigure }) {
  const { icon: Icon } = template;
- // Estado visual: instalado, eliminado (soft-delete), próximamente, custom no instalado
  const isRemoved = template.removed;
+ const isUnderConstruction = template.underConstruction;
  return (
  <div className={`p-5 rounded-2xl flex flex-col gap-3 border-2 ${
+ isUnderConstruction ? "border-blue-200 border-solid bg-blue-50/30" :
  template.installed ? "border-stone-200 border-solid bg-white" :
  isRemoved ? "border-amber-300 border-dashed bg-amber-50/30" :
  "border-orange-300 border-dashed bg-white"
  } ${template.soon ? "opacity-60" : ""}`}>
  <div className="flex items-center gap-3">
  <div className={`w-10 h-10 rounded-xl grid place-items-center ${
+ isUnderConstruction ? "bg-blue-100 text-blue-600" :
  template.installed ? "bg-stone-100 text-stone-600" :
  isRemoved ? "bg-amber-100 text-amber-700" :
  "bg-orange-50 text-orange-700"
@@ -4373,7 +5508,12 @@ function TemplateCard({ template, onCreate, onReinstall, onConfigure }) {
  </div>
  <div className="flex-1">
  <div className="font-serif text-base font-semibold">{template.name}</div>
- {template.installed && (
+ {isUnderConstruction && (
+ <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 inline-flex items-center gap-1">
+ <Settings size={10} className="animate-spin" style={{ animationDuration: "3s" }} /> En construcción
+ </span>
+ )}
+ {template.installed && !isUnderConstruction && (
  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 inline-flex items-center gap-1">
  <Check size={10} /> Instalado
  </span>
@@ -4405,7 +5545,19 @@ function TemplateCard({ template, onCreate, onReinstall, onConfigure }) {
  <Clock size={14} /> En desarrollo
  </button>
  )}
- {template.installed && !template.custom && (
+ {isUnderConstruction && (
+ <div className="space-y-2">
+   <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-800 leading-relaxed">
+     <span className="font-semibold">Instalado pero en construcción.</span> Este módulo está registrado en el sistema
+     y sus datos de historial están activos, pero la interfaz operativa aún no está disponible.
+     Se habilitará en una próxima actualización.
+   </div>
+   <button disabled className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-blue-100 border border-blue-200 text-blue-600 text-sm font-semibold cursor-not-allowed">
+     <Lock size={14} /> Módulo en construcción
+   </button>
+ </div>
+ )}
+ {template.installed && !template.custom && !isUnderConstruction && (
  <button
    onClick={onConfigure}
    className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-white border border-stone-200 hover:border-orange-400 text-stone-700 text-sm font-semibold transition"
@@ -4559,6 +5711,7 @@ function VetCRM({ onOpenPassport, onOpenVetPassport, canAccessVetPassport, vetSu
        code: newCode,
        name: formData.name,
        species: formData.species || "dog",
+       speciesOther: formData.speciesOther || "",
        breed: formData.breed || "—",
        age: formData.age || "—",
        weight: null,
@@ -4568,6 +5721,13 @@ function VetCRM({ onOpenPassport, onOpenVetPassport, canAccessVetPassport, vetSu
        microchip: "",
        birthdate: null,
        photo: null,
+       // Campos clínicos de la ficha extendida — inicializados vacíos para que
+       // FichaClinicaCard pueda editarlos sin tener que crear el campo on-the-fly.
+       allergies: "",
+       chronicConditions: "",
+       diet: "",
+       behavior: "",
+       notes: "",
        tutors: formData.ownerName ? [{
          id: `t-${Date.now().toString(36)}`,
          name: formData.ownerName,
@@ -4649,6 +5809,10 @@ function VetCRM({ onOpenPassport, onOpenVetPassport, canAccessVetPassport, vetSu
        tratamiento: (n.tratamiento || "").trim(),
        fechaControl: (n.fechaControl || "").trim(),
      },
+     // Fotos clínicas (base64 + caption)
+     photos: (() => { try { return JSON.parse(n.fotos || "[]"); } catch { return []; } })(),
+     // Recetas médicas
+     recipes: (() => { try { return JSON.parse(n.recetas || "[]"); } catch { return []; } })(),
      // Insumos usados
      supplies: (suppliesUsed || []).map(s => ({
        name: s.name,
@@ -4693,8 +5857,8 @@ function VetCRM({ onOpenPassport, onOpenVetPassport, canAccessVetPassport, vetSu
    });
  };
 
- // Mapa paciente → factura activa (en borrador) durante la atención
- // Cuando el vet inicia "consulta" o "tratamiento_sede", hay UNA factura abierta
+ // Mapa paciente → recibo activa (en borrador) durante la atención
+ // Cuando el vet inicia "consulta" o "tratamiento_sede", hay UNA recibo abierta
  // a la que se van añadiendo insumos. Al cerrar, pasa a "emitido" y opcionalmente "pagado".
  const [activeInvoiceByPatient, setActiveInvoiceByPatient] = useState({});
 
@@ -4721,7 +5885,7 @@ function VetCRM({ onOpenPassport, onOpenVetPassport, canAccessVetPassport, vetSu
    return clients.find(c => c.name.toLowerCase().split(" ")[0] === parts[0]) || null;
  };
 
- // Crear o actualizar factura asociada al paciente con los insumos usados
+ // Crear o actualizar recibo asociada al paciente con los insumos usados
  const upsertInvoiceForPatient = (patient, suppliesUsed, options = {}) => {
    if (!setInvoices) return null;
    const client = findClientForPatient(patient);
@@ -4748,14 +5912,14 @@ function VetCRM({ onOpenPassport, onOpenVetPassport, canAccessVetPassport, vetSu
    const existingId = activeInvoiceByPatient[patient.id];
 
    if (existingId) {
-     // Actualizar la factura existente
+     // Actualizar la recibo existente
      setInvoices(prev => prev.map(inv => inv.id === existingId
        ? { ...inv, items, subtotal, tax, total, balance: total - inv.paid }
        : inv
      ));
      return existingId;
    } else {
-     // Crear factura en borrador
+     // Crear recibo en borrador
      const newId = `inv-vet-${Date.now().toString(36)}`;
      const newNumber = `00-${String(invoices.length + 1).padStart(7, "0")}`;
      const today = new Date().toISOString().slice(0, 10);
@@ -4869,6 +6033,44 @@ function VetCRM({ onOpenPassport, onOpenVetPassport, canAccessVetPassport, vetSu
  // sin pasaporte previo). Se mezclan con VET_PATIENTS para alimentar el kanban.
  // En producción esto vendría de la BD ya unificado.
  const [extraPatients, setExtraPatients] = useState([]);
+
+ // === Auto-importar reservas creadas desde el chat ===
+ // Cuando alguien agenda una cita de tipo "vet" desde Mensajes (source:"chat"),
+ // la convertimos automáticamente en un paciente del kanban con status "reserva".
+ // Así aparece en la columna "Reserva hoy" el día de la cita. Solo importamos
+ // eventos para HOY que no estén ya como paciente (evitamos duplicados).
+ useEffect(() => {
+   if (!agendaEvents) return;
+   const today = new Date().toISOString().slice(0, 10);
+   const chatReservations = agendaEvents.filter(e =>
+     e.source === "chat" && e.type === "vet" && e.date === today
+   );
+   if (chatReservations.length === 0) return;
+   setExtraPatients(prev => {
+     const existingIds = new Set([...VET_PATIENTS.map(p => p.id), ...prev.map(p => p.id)]);
+     const newOnes = chatReservations
+       .filter(e => !existingIds.has(`chat-${e.id}`))
+       .map(e => ({
+         id: `chat-${e.id}`,
+         code: e.petCode || "—",
+         name: e.pet || "Sin nombre",
+         species: e.species || "dog",
+         breed: e.breed || "—",
+         age: "—",
+         owner: e.owner || "—",
+         status: "reserva",
+         moduleId: myModuleId,
+         _chatEventId: e.id,
+         _invoiceId: e.invoiceId || null,
+       }));
+     if (newOnes.length === 0) return prev;
+     // Inicializar flow para cada nuevo paciente
+     newOnes.forEach(p => {
+       setPatientFlow(pf => ({ ...pf, [p.id]: { status: "reserva", suppliesUsed: [], notes: "" } }));
+     });
+     return [...prev, ...newOnes];
+   });
+ }, [agendaEvents, myModuleId]);
 
  // === Filtrado por instancia ===
  // Pacientes con status dinámico desde patientFlow, FILTRADOS por moduleId.
@@ -5132,6 +6334,7 @@ function VetCRM({ onOpenPassport, onOpenVetPassport, canAccessVetPassport, vetSu
          onRequestWalkInPassport={(ctx) => setWalkInWizard(ctx)}
          onMoveStatus={(patientId, newStatus) => advancePatient(patientId, newStatus, { movedAt: new Date().toISOString() })}
          vetEvents={vetEventsState}
+         activeModule={myModule}
        />
      </div>
 
@@ -5321,7 +6524,16 @@ function VetCRM({ onOpenPassport, onOpenVetPassport, canAccessVetPassport, vetSu
        onCloseInvoice={() => closeInvoiceForPatient(drawerPatient.id)}
        onGoToSales={onGoToSales}
        invoice={invoices.find(i => i.id === activeInvoiceByPatient[drawerPatient.id])}
+       invoices={invoices}
        passport={passports.find(pp => pp.code === drawerPatient.code) || null}
+       onUpdatePassport={(updates) => {
+         // Actualiza el pasaporte de la mascota desde el drawer sin perder eventos clínicos.
+         // Usado por el botón "Editar" de la sección Mascota.
+         const targetCode = drawerPatient.code;
+         setPassports && setPassports(prev => prev.map(pp =>
+           pp.code === targetCode ? { ...pp, ...updates } : pp
+         ));
+       }}
        clients={clients}
        canMessage={canMessage}
        conversation={tutorConv}
@@ -6309,7 +7521,7 @@ function GroomingCRM({ onOpenPassport, services: globalServices = [], setService
              </div>
              <div className="p-5 text-sm text-stone-700 leading-relaxed space-y-3">
                <p>
-                 Esto removerá <strong>"{svc.name}"</strong> del catálogo. Las facturas y citas históricas que lo mencionan no se modifican.
+                 Esto removerá <strong>"{svc.name}"</strong> del catálogo. Las recibos y citas históricas que lo mencionan no se modifican.
                </p>
                <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-xs text-amber-900 flex items-start gap-2">
                  <Info size={11} className="text-amber-700 flex-shrink-0 mt-0.5" />
@@ -6667,85 +7879,129 @@ function NewGroomingAppointmentModal({ onClose, onCreate, services }) {
     </div>
   );
 }
-
 // ========== VISTA: STANDARD CRM (kanban) ==========
 
-function StandardCRM({ title, customFields }) {
- const stages = [
- { id: "prospecto", label: "Prospecto", color: "bg-stone-400" },
- { id: "contacto", label: "Contactado", color: "bg-orange-400" },
- { id: "propuesta", label: "Propuesta", color: "bg-orange-600" },
- { id: "cerrado", label: "Cerrado", color: "bg-emerald-500" },
- ];
+function StandardCRM({ title, customFields, activeModule = null }) {
+  // Data-driven: si el módulo trae columnas custom (creadas en el wizard),
+  // las usamos. Si no, fallback a los stages clásicos del B2B.
+  const moduleColumns = activeModule?.columns;
+  const stages = (moduleColumns && moduleColumns.length > 0)
+    ? moduleColumns.map((c, i) => ({
+        id: c.id,
+        label: c.label,
+        // Mapeo de color por posición — para que cualquier set de columnas
+        // tenga una progresión visual consistente (gris → naranja → verde).
+        color: i === 0 ? "bg-stone-400"
+             : i === moduleColumns.length - 1 ? "bg-emerald-500"
+             : i % 2 === 0 ? "bg-orange-400" : "bg-orange-600",
+      }))
+    : [
+        { id: "prospecto", label: "Prospecto",   color: "bg-stone-400" },
+        { id: "contacto",  label: "Contactado",  color: "bg-orange-400" },
+        { id: "propuesta", label: "Propuesta",   color: "bg-orange-600" },
+        { id: "cerrado",   label: "Cerrado",     color: "bg-emerald-500" },
+      ];
 
- return (
- <div className="space-y-5">
- <div className="flex items-center justify-between flex-wrap gap-3">
- <div>
- <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold">CRM Estándar · Configurable</div>
- <h3 className="font-serif text-xl font-semibold mt-1">Pipeline de {title}</h3>
- {customFields && (
- <div className="flex gap-1.5 mt-2 flex-wrap items-center">
- <span className="text-xs text-stone-400 mr-1">Campos personalizados:</span>
- {customFields.map((f, i) => (
- <span key={i} className="text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-800">
- {f.label}
- </span>
- ))}
- </div>
- )}
- </div>
- <div className="flex gap-2">
- <button className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white border border-stone-200 hover:border-orange-400 text-stone-700 text-sm font-semibold transition">
- <Settings size={14} /> Reglas
- </button>
- <button className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold transition">
- <Plus size={14} /> Nuevo registro
- </button>
- </div>
- </div>
+  // Combinar customFields del activeModule y el legacy customFields prop
+  const fieldsToShow = activeModule?.fields || customFields;
 
- <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
- {stages.map(stage => (
- <div key={stage.id} className="bg-stone-100 rounded-xl p-3 min-h-80">
- <div className="flex items-center justify-between mb-2.5 px-1">
- <div className="flex items-center gap-2">
- <span className={`w-2 h-2 rounded-full ${stage.color}`}></span>
- <span className="font-semibold text-sm text-stone-900">{stage.label}</span>
- <span className="text-xs text-stone-400">· {(STANDARD_CARDS[stage.id] || []).length}</span>
- </div>
- <MoreHorizontal size={14} className="text-stone-400" />
- </div>
- <div className="space-y-2">
- {(STANDARD_CARDS[stage.id] || []).map(c => (
- <div key={c.id} className="bg-white p-3 rounded-xl border border-stone-200 hover:-translate-y-0.5 hover:shadow transition cursor-pointer">
- <div className="font-semibold text-sm mb-1">{c.name}</div>
- <div className="text-xs text-stone-600 mb-2 flex items-center gap-1.5">
- <Users size={11} /> {c.contact}
- </div>
- <div className="text-xs text-stone-400 leading-relaxed mb-2.5">{c.note}</div>
- <div className="flex justify-between items-center">
- <span className="font-serif text-base font-semibold text-orange-700">{c.value}</span>
- <ChevronRight size={14} className="text-stone-400" />
- </div>
- </div>
- ))}
- <button className="w-full px-3 py-2.5 bg-transparent border border-dashed border-stone-300 hover:border-orange-400 hover:text-orange-700 rounded-xl text-stone-400 text-xs font-medium flex items-center justify-center gap-1.5 transition">
- <Plus size={13} /> Añadir
- </button>
- </div>
- </div>
- ))}
- </div>
- </div>
- );
+  // Cards seed solo cuando es el módulo B2B original (id "standard"). Cualquier
+  // módulo nuevo arranca limpio con columnas vacías, listo para que el cliente
+  // agregue sus propios registros.
+  const isOriginalB2B = activeModule?.id === "standard" || !activeModule;
+  const cardsByStage = isOriginalB2B ? STANDARD_CARDS : {};
+
+  // Toggles del módulo — si el admin desactivó dragAndDrop o invoiceLink, los respetamos
+  const features = activeModule?.features || {};
+  const fieldsConfig = activeModule?.cardFields || {};
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold">CRM Estándar · Configurable</div>
+          <h3 className="font-serif text-xl font-semibold mt-1">Pipeline de {title}</h3>
+          {fieldsToShow && fieldsToShow.length > 0 && (
+            <div className="flex gap-1.5 mt-2 flex-wrap items-center">
+              <span className="text-xs text-stone-400 mr-1">Campos personalizados:</span>
+              {fieldsToShow.map((f, i) => (
+                <span key={i} className="text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-800">
+                  {f.label}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <button className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white border border-stone-200 hover:border-orange-400 text-stone-700 text-sm font-semibold transition">
+            <Settings size={14} /> Reglas
+          </button>
+          <button className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold transition">
+            <Plus size={14} /> Nuevo registro
+          </button>
+        </div>
+      </div>
+
+      {/* Grid dinámico: ajusta columnas según cuántas tenga el módulo */}
+      <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 ${
+        stages.length === 3 ? "md:grid-cols-3" :
+        stages.length === 5 ? "md:grid-cols-5" :
+        stages.length === 6 ? "md:grid-cols-6" :
+        "md:grid-cols-4"
+      }`}>
+        {stages.map(stage => {
+          const cards = cardsByStage[stage.id] || [];
+          return (
+            <div key={stage.id} className="bg-stone-100 rounded-xl p-3 min-h-80">
+              <div className="flex items-center justify-between mb-2.5 px-1">
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${stage.color}`}></span>
+                  <span className="font-semibold text-sm text-stone-900">{stage.label}</span>
+                  <span className="text-xs text-stone-400">· {cards.length}</span>
+                </div>
+                <MoreHorizontal size={14} className="text-stone-400" />
+              </div>
+              <div className="space-y-2">
+                {cards.length === 0 ? (
+                  <div className="text-center py-6 text-xs text-stone-400 italic">
+                    Sin registros
+                  </div>
+                ) : (
+                  cards.map(c => (
+                    <div key={c.id} className="bg-white p-3 rounded-xl border border-stone-200 hover:-translate-y-0.5 hover:shadow transition cursor-pointer">
+                      <div className="font-semibold text-sm mb-1">{c.name}</div>
+                      {fieldsConfig.tutorName !== false && c.contact && (
+                        <div className="text-xs text-stone-500 mb-1">{c.contact}</div>
+                      )}
+                      {c.value && (
+                        <div className="text-xs font-mono font-bold text-orange-700 mb-1">{c.value}</div>
+                      )}
+                      {c.note && (
+                        <div className="text-xs text-stone-400 italic line-clamp-2">{c.note}</div>
+                      )}
+                    </div>
+                  ))
+                )}
+                {/* Botón add card cuando está vacío y permite drag&drop */}
+                {features.dragAndDrop !== false && (
+                  <button className="w-full mt-1 py-1.5 rounded-lg border-2 border-dashed border-stone-300 text-stone-400 hover:border-orange-300 hover:text-orange-600 text-xs font-semibold transition">
+                    + Agregar
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // ========== VISTA: PASAPORTE ==========
 
 // ========== VISTA: PASAPORTE (BIBLIOTECA) ==========
 
-function PassportView({ passports, setPassports, clients, setClients, canCreate, initialSearch, onClearInitialSearch, onMessageClient }) {
+function PassportView({ passports, setPassports, clients, setClients, canCreate, initialSearch, onClearInitialSearch, onMessageClient, embedded = false }) {
   const [selectedId, setSelectedId] = useState(null);
   const [searchQuery, setSearchQuery] = useState(initialSearch || "");
   const [speciesFilter, setSpeciesFilter] = useState("all");
@@ -6774,10 +8030,15 @@ function PassportView({ passports, setPassports, clients, setClients, canCreate,
     const fullPet = {
       id: newId,
       code,
+      // Defaults clínicos: garantizan que la ficha clínica funciona aunque
+      // el form de creación no traiga estos campos.
+      weight: null, color: "", microchip: "", birthdate: null, photo: null,
+      allergies: "", chronicConditions: "", diet: "", behavior: "", notes: "",
+      vaccines: [], medications: [], visits: [],
       ...newPet,
       issuedAt: new Date().toLocaleDateString("es", { month: "short", year: "numeric" }),
-      tutors: [],
-      events: [],
+      tutors: newPet.tutors || [],
+      events: newPet.events || [],
     };
     setPassports([...passports, fullPet]);
 
@@ -6840,29 +8101,20 @@ function PassportView({ passports, setPassports, clients, setClients, canCreate,
 
   return (
     <div className="space-y-5">
-      {/* Hero con stats */}
-      <div className="relative p-6 rounded-2xl bg-gradient-to-br from-white via-orange-50 to-orange-100 border border-stone-200 overflow-hidden">
-        <div className="flex items-center gap-6 flex-wrap relative">
-          <div className="flex-1 min-w-0">
-            <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold mb-2">
-              Biblioteca · Pasaportes veterinarios
-            </div>
-            <h2 className="font-serif text-3xl font-semibold leading-tight mb-2">
-              <span className="text-orange-700">{stats.total}</span> mascotas registradas
-            </h2>
-            <p className="text-stone-600 leading-relaxed max-w-xl text-sm">
-              Cada mascota tiene un código único de 6 dígitos generado por hash multiplicativo de Knuth.
-              Los códigos no son secuenciales y no se repiten.
-            </p>
+      {/* Banner contextual — solo cuando la vista está embebida dentro del tab
+          "Pasaportes" del directorio de clientes. Aclara que son las tarjetas de
+          todas las mascotas registradas. */}
+      {embedded && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 grid place-items-center flex-shrink-0">
+            <PawPrint size={15} strokeWidth={2} />
           </div>
-          <div className="flex gap-2.5 flex-wrap">
-            <Kpi label="Total" value={stats.total} accent />
-            <Kpi label="Con 3 tutores" value={stats.withMaxTutors} />
-            <Kpi label="Especies" value={Object.keys(stats.bySpecies).length} />
+          <div className="text-sm text-emerald-900">
+            <span className="font-semibold">Pasaportes de mascotas.</span>{" "}
+            Tarjetas de todas las mascotas registradas. Haz clic en una para ver su ficha completa.
           </div>
         </div>
-      </div>
-
+      )}
       {/* Toolbar */}
       <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-4 flex flex-col lg:flex-row gap-3 items-start lg:items-center">
         {/* Búsqueda */}
@@ -6964,6 +8216,11 @@ function PassportView({ passports, setPassports, clients, setClients, canCreate,
               p.id === selected.id ? { ...p, tutors: newTutors } : p
             ));
           }}
+          onUpdatePassport={(updates) => {
+            setPassports(passports.map(p =>
+              p.id === selected.id ? { ...p, ...updates } : p
+            ));
+          }}
         />
       )}
 
@@ -7044,11 +8301,13 @@ function PassportCard({ passport, onOpen }) {
 
 // ========== MODAL DETALLE DE PASAPORTE ==========
 
-function PassportDetailModal({ passport, clients, onClose, onUpdateTutors, onMessageClient }) {
+function PassportDetailModal({ passport, clients, onClose, onUpdateTutors, onUpdatePassport, onMessageClient }) {
   const [filter, setFilter] = useState("all");
   const [showAddTutor, setShowAddTutor] = useState(false);
   // Modal de detalle de un evento clínico específico (lupa)
   const [eventDetail, setEventDetail] = useState(null);
+  // Edición/creación de evento de la cronología
+  const [editingEvent, setEditingEvent] = useState(null);
 
   const filteredEvents = useMemo(() => {
     if (filter === "all") return passport.events;
@@ -7147,6 +8406,9 @@ function PassportDetailModal({ passport, clients, onClose, onUpdateTutors, onMes
             </div>
           </div>
 
+          {/* === Ficha clínica · datos editables === */}
+          <FichaClinicaCard passport={passport} onUpdatePassport={onUpdatePassport} />
+
           {/* Timeline */}
           <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-6">
             <div className="flex justify-between items-end mb-4 gap-3 flex-wrap">
@@ -7154,7 +8416,7 @@ function PassportDetailModal({ passport, clients, onClose, onUpdateTutors, onMes
                 <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold">Historial completo</div>
                 <h3 className="font-serif text-xl font-semibold mt-0.5">Cronología clínica</h3>
               </div>
-              <div className="flex gap-1.5 flex-wrap">
+              <div className="flex gap-1.5 flex-wrap items-center">
                 {[
                   { id: "all", label: "Todo", Icon: History },
                   { id: "vacuna", label: "Vacunas", Icon: Syringe },
@@ -7176,6 +8438,14 @@ function PassportDetailModal({ passport, clients, onClose, onUpdateTutors, onMes
                     </button>
                   );
                 })}
+                {onUpdatePassport && (
+                  <button
+                    onClick={() => setEditingEvent({ isNew: true, type: "consulta", date: new Date().toISOString().slice(0, 10), title: "", note: "", doctor: "" })}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-orange-600 hover:bg-orange-700 text-white transition"
+                  >
+                    <Plus size={12} strokeWidth={2} /> Nuevo
+                  </button>
+                )}
               </div>
             </div>
 
@@ -7186,11 +8456,44 @@ function PassportDetailModal({ passport, clients, onClose, onUpdateTutors, onMes
                   Sin registros para este filtro.
                 </div>
               )}
-              {filteredEvents.map((e, i) => <TimelineEvent key={i} event={e} onView={(ev) => setEventDetail(ev)} />)}
+              {filteredEvents.map((e, i) => (
+                <TimelineEvent
+                  key={i}
+                  event={e}
+                  onView={(ev) => setEventDetail(ev)}
+                  onEdit={onUpdatePassport ? () => setEditingEvent({ ...e, originalIndex: passport.events.indexOf(e) }) : null}
+                  onDelete={onUpdatePassport ? () => {
+                    if (confirm(`¿Eliminar este registro?\n\n"${e.title}"`)) {
+                      const newEvents = passport.events.filter(ev => ev !== e);
+                      onUpdatePassport({ events: newEvents });
+                    }
+                  } : null}
+                />
+              ))}
             </div>
           </div>
         </div>
       </div>
+
+      {/* Modal de edición/creación de evento clínico */}
+      {editingEvent && (
+        <TimelineEventEditor
+          event={editingEvent}
+          onClose={() => setEditingEvent(null)}
+          onSave={(updatedEvent) => {
+            const existingEvents = passport.events || [];
+            let newEvents;
+            if (editingEvent.isNew) {
+              newEvents = [updatedEvent, ...existingEvents];
+            } else {
+              const idx = editingEvent.originalIndex;
+              newEvents = existingEvents.map((e, i) => i === idx ? updatedEvent : e);
+            }
+            onUpdatePassport({ events: newEvents });
+            setEditingEvent(null);
+          }}
+        />
+      )}
 
       {showAddTutor && (
         <AddTutorModal
@@ -7307,6 +8610,216 @@ function MetaCell({ label, value, mono }) {
   );
 }
 
+// ========== FICHA CLÍNICA EDITABLE (en PassportDetailModal) ==========
+// Tarjeta colapsable que muestra y permite editar todos los campos clínicos
+// del pasaporte (igual que los datos del wizard "Ficha clínica completa").
+function FichaClinicaCard({ passport, onUpdatePassport }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({
+    name: passport.name || "",
+    breed: passport.breed || "",
+    species: passport.species || "dog",
+    color: passport.color || "",
+    age: passport.age || "",
+    gender: passport.gender || "M",
+    sterilized: passport.sterilized || false,
+    weight: passport.weight || "",
+    microchip: passport.microchip || "—",
+    birthdate: passport.birthdate || "",
+    allergies: passport.allergies || "",
+    chronicConditions: passport.chronicConditions || "",
+    diet: passport.diet || "",
+    behavior: passport.behavior || "",
+    notes: passport.notes || "",
+  });
+
+  const handleSave = () => {
+    onUpdatePassport?.(draft);
+    setEditing(false);
+  };
+
+  const handleCancel = () => {
+    setDraft({
+      name: passport.name || "",
+      breed: passport.breed || "",
+      species: passport.species || "dog",
+      color: passport.color || "",
+      age: passport.age || "",
+      gender: passport.gender || "M",
+      sterilized: passport.sterilized || false,
+      weight: passport.weight || "",
+      microchip: passport.microchip || "—",
+      birthdate: passport.birthdate || "",
+      allergies: passport.allergies || "",
+      chronicConditions: passport.chronicConditions || "",
+      diet: passport.diet || "",
+      behavior: passport.behavior || "",
+      notes: passport.notes || "",
+    });
+    setEditing(false);
+  };
+
+  const update = (field, value) => setDraft(d => ({ ...d, [field]: value }));
+
+  const SPECIES_OPTS = [
+    { id: "dog", label: "Perro" },
+    { id: "cat", label: "Gato" },
+    { id: "bird", label: "Ave" },
+    { id: "rabbit", label: "Conejo" },
+    { id: "fish", label: "Pez" },
+    { id: "rodent", label: "Roedor" },
+    { id: "other", label: "Otros" },
+  ];
+
+  return (
+    <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-6">
+      <div className="flex justify-between items-end mb-4 gap-3 flex-wrap">
+        <div>
+          <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold">Ficha clínica</div>
+          <h3 className="font-serif text-xl font-semibold mt-0.5">Datos editables</h3>
+        </div>
+        {onUpdatePassport && (
+          editing ? (
+            <div className="flex gap-2">
+              <button onClick={handleCancel} className="px-3 py-1.5 rounded-xl text-xs font-semibold border border-stone-200 hover:border-stone-400 text-stone-700 transition">
+                Cancelar
+              </button>
+              <button onClick={handleSave} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition">
+                <Check size={11} /> Guardar cambios
+              </button>
+            </div>
+          ) : (
+            <button onClick={() => setEditing(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 transition">
+              <FileText size={11} /> Editar ficha
+            </button>
+          )
+        )}
+      </div>
+
+      {/* === Datos básicos === */}
+      <div className="space-y-4">
+        <div>
+          <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold mb-2">Datos básicos</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <FichaField label="Nombre" value={draft.name} editing={editing} onChange={(v) => update("name", v)} />
+            <FichaField label="Especie" value={SPECIES_OPTS.find(s => s.id === draft.species)?.label || draft.species} editing={editing} type="select" options={SPECIES_OPTS} rawValue={draft.species} onChange={(v) => update("species", v)} />
+            <FichaField label="Raza" value={draft.breed} editing={editing} onChange={(v) => update("breed", v)} />
+            <FichaField label="Color / Capa" value={draft.color} editing={editing} onChange={(v) => update("color", v)} />
+            <FichaField label="Edad" value={draft.age} editing={editing} placeholder="Ej: 3 años, 2 meses" onChange={(v) => update("age", v)} />
+            <FichaField label="Fecha de nacimiento" value={draft.birthdate} editing={editing} placeholder="Aproximada" onChange={(v) => update("birthdate", v)} />
+            <FichaField label="Sexo" value={draft.gender === "M" ? "Macho" : draft.gender === "F" ? "Hembra" : "Desconocido"} editing={editing} type="gender" rawValue={draft.gender} onChange={(v) => update("gender", v)} />
+            <FichaField label="Esterilizado" value={draft.sterilized ? "Sí" : "No"} editing={editing} type="bool" rawValue={draft.sterilized} onChange={(v) => update("sterilized", v)} />
+          </div>
+        </div>
+
+        <div>
+          <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold mb-2">Identificación y biometría</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <FichaField label="Peso actual" value={draft.weight} editing={editing} placeholder="Ej: 15 kg" onChange={(v) => update("weight", v)} />
+            <FichaField label="Microchip" value={draft.microchip} editing={editing} mono placeholder="Número o —" onChange={(v) => update("microchip", v)} />
+          </div>
+        </div>
+
+        <div>
+          <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold mb-2">Antecedentes y comportamiento</div>
+          <div className="space-y-3">
+            <FichaField label="Alergias conocidas" value={draft.allergies} editing={editing} placeholder="Medicamentos, alimentos, ambientales..." onChange={(v) => update("allergies", v)} multiline />
+            <FichaField label="Condiciones crónicas" value={draft.chronicConditions} editing={editing} placeholder="Diabetes, cardiopatía, displasia..." onChange={(v) => update("chronicConditions", v)} multiline />
+            <FichaField label="Dieta actual" value={draft.diet} editing={editing} placeholder="Tipo de alimento, raciones, suplementos..." onChange={(v) => update("diet", v)} multiline />
+            <FichaField label="Comportamiento / temperamento" value={draft.behavior} editing={editing} placeholder="Sociable, agresivo con extraños, miedo a ruidos..." onChange={(v) => update("behavior", v)} multiline />
+            <FichaField label="Notas generales" value={draft.notes} editing={editing} placeholder="Información adicional relevante..." onChange={(v) => update("notes", v)} multiline />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FichaField({ label, value, editing, onChange, placeholder = "", mono = false, multiline = false, type = "text", options = [], rawValue = null }) {
+  if (!editing) {
+    const display = value || "—";
+    return (
+      <div>
+        <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold mb-1">{label}</div>
+        <div className={`${mono ? "font-mono text-xs text-stone-600" : "text-sm text-stone-900"} ${value ? "font-semibold" : "text-stone-400 italic font-normal"}`}>
+          {display}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <label className="block text-xs tracking-widest uppercase text-stone-500 font-semibold mb-1">{label}</label>
+      {type === "select" ? (
+        <select
+          value={rawValue}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400"
+        >
+          {options.map(opt => <option key={opt.id} value={opt.id}>{opt.label}</option>)}
+        </select>
+      ) : type === "gender" ? (
+        <div className="flex gap-1.5">
+          {[
+            { id: "M", label: "♂ Macho" },
+            { id: "F", label: "♀ Hembra" },
+            { id: "U", label: "Desconocido" },
+          ].map(g => (
+            <button
+              key={g.id}
+              type="button"
+              onClick={() => onChange(g.id)}
+              className={`flex-1 px-2 py-2 rounded-lg text-xs font-semibold transition border ${
+                rawValue === g.id
+                  ? "bg-orange-600 text-white border-orange-600"
+                  : "bg-white border-stone-200 text-stone-600 hover:border-orange-300"
+              }`}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
+      ) : type === "bool" ? (
+        <div className="flex gap-1.5">
+          {[
+            { id: true, label: "Sí" },
+            { id: false, label: "No" },
+          ].map(b => (
+            <button
+              key={String(b.id)}
+              type="button"
+              onClick={() => onChange(b.id)}
+              className={`flex-1 px-2 py-2 rounded-lg text-xs font-semibold transition border ${
+                rawValue === b.id
+                  ? "bg-orange-600 text-white border-orange-600"
+                  : "bg-white border-stone-200 text-stone-600 hover:border-orange-300"
+              }`}
+            >
+              {b.label}
+            </button>
+          ))}
+        </div>
+      ) : multiline ? (
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          rows={2}
+          className="w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400 resize-y placeholder:text-stone-400"
+        />
+      ) : (
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          className={`w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400 placeholder:text-stone-400 ${mono ? "font-mono" : ""}`}
+        />
+      )}
+    </div>
+  );
+}
+
 function TutorCard({ tutor, isPrincipal, canRemove, onRemove }) {
   const initials = tutor.name.split(" ").slice(0, 2).map(s => s[0]).join("").toUpperCase();
   return (
@@ -7346,7 +8859,7 @@ function TutorCard({ tutor, isPrincipal, canRemove, onRemove }) {
   );
 }
 
-function TimelineEvent({ event, onView }) {
+function TimelineEvent({ event, onView, onEdit, onDelete }) {
   const config = {
     vaccination:  { Icon: Syringe, badge: "text-blue-700 bg-blue-100", dot: "border-blue-500", label: "Vacunación" },
     vacuna:       { Icon: Syringe, badge: "text-blue-700 bg-blue-100", dot: "border-blue-500", label: "Vacunación" },
@@ -7370,9 +8883,8 @@ function TimelineEvent({ event, onView }) {
           <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold tracking-wider uppercase ${config.badge}`}>
             <Icon size={11} /> {config.label}
           </span>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-1.5">
             <span className="text-xs text-stone-400">{event.date}</span>
-            {/* Lupa para detalle completo */}
             {onView && (
               <button
                 onClick={() => onView(event)}
@@ -7382,12 +8894,175 @@ function TimelineEvent({ event, onView }) {
                 <Search size={11} />
               </button>
             )}
+            {onEdit && (
+              <button
+                onClick={onEdit}
+                title="Editar evento"
+                className="w-7 h-7 rounded-lg bg-stone-100 hover:bg-blue-100 grid place-items-center text-stone-600 hover:text-blue-700 transition"
+              >
+                <Edit3 size={11} />
+              </button>
+            )}
+            {onDelete && (
+              <button
+                onClick={onDelete}
+                title="Eliminar evento"
+                className="w-7 h-7 rounded-lg bg-stone-100 hover:bg-red-100 grid place-items-center text-stone-600 hover:text-red-700 transition"
+              >
+                <Trash2 size={11} />
+              </button>
+            )}
           </div>
         </div>
         <div className="font-semibold text-sm mb-1">{event.title}</div>
         <div className="text-xs text-stone-600 leading-relaxed">{event.note}</div>
         <div className="text-xs text-stone-400 mt-2 pt-2 border-t border-dashed border-stone-200 flex items-center gap-1.5">
           <Stethoscope size={11} /> {event.doctor}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== EDITOR DE EVENTO CLÍNICO ==========
+// Modal para crear/editar un evento de la cronología clínica del pasaporte.
+function TimelineEventEditor({ event, onClose, onSave }) {
+  const [type, setType] = useState(event.type || "consulta");
+  const [date, setDate] = useState(event.date || new Date().toISOString().slice(0, 10));
+  const [title, setTitle] = useState(event.title || "");
+  const [note, setNote] = useState(event.note || "");
+  const [doctor, setDoctor] = useState(event.doctor || "");
+
+  const TYPES = [
+    { id: "consulta", label: "Consulta",        Icon: Stethoscope,  color: "orange" },
+    { id: "vacuna",   label: "Vacunación",      Icon: Syringe,      color: "blue" },
+    { id: "deworming", label: "Desparasitación", Icon: Pill,         color: "emerald" },
+    { id: "cirugia",  label: "Cirugía",         Icon: Scissors,     color: "red" },
+    { id: "examen",   label: "Examen",          Icon: FlaskConical, color: "blue" },
+  ];
+
+  const canSave = title.trim() && date;
+
+  const handleSave = () => {
+    if (!canSave) return;
+    onSave({
+      ...event,
+      type,
+      date,
+      title: title.trim(),
+      note: note.trim(),
+      doctor: doctor.trim() || "—",
+    });
+  };
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 bg-stone-900/70 z-[60] flex justify-center items-start p-4 sm:p-12 overflow-y-auto">
+      <div onClick={(e) => e.stopPropagation()} className="bg-stone-50 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col">
+        <div className="p-4 border-b border-stone-200 bg-gradient-to-br from-orange-50 to-white flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-orange-500 text-white grid place-items-center shadow-lg flex-shrink-0">
+            <Edit3 size={16} strokeWidth={2} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs tracking-widest uppercase text-orange-700 font-bold">
+              {event.isNew ? "Nuevo evento clínico" : "Editar evento"}
+            </div>
+            <h3 className="font-serif text-lg font-semibold mt-0.5 leading-tight">
+              Cronología del pasaporte
+            </h3>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-lg bg-white hover:bg-stone-100 grid place-items-center text-stone-500 flex-shrink-0">
+            <X size={14} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {/* Tipo */}
+          <div>
+            <label className="block text-xs tracking-widest uppercase text-stone-500 font-semibold mb-1.5">Tipo de evento *</label>
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+              {TYPES.map(t => {
+                const Ic = t.Icon;
+                const active = type === t.id;
+                const colors = {
+                  orange:  active ? "bg-orange-600 text-white border-orange-600"   : "bg-white text-stone-600 border-stone-200",
+                  blue:    active ? "bg-blue-600 text-white border-blue-600"       : "bg-white text-stone-600 border-stone-200",
+                  emerald: active ? "bg-emerald-600 text-white border-emerald-600" : "bg-white text-stone-600 border-stone-200",
+                  red:     active ? "bg-red-600 text-white border-red-600"         : "bg-white text-stone-600 border-stone-200",
+                };
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setType(t.id)}
+                    className={`flex flex-col items-center gap-1 px-2 py-2 rounded-lg border transition ${colors[t.color]}`}
+                  >
+                    <Ic size={14} strokeWidth={active ? 2.2 : 1.8} />
+                    <span className="text-[10px] font-semibold">{t.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Fecha */}
+          <div>
+            <label className="block text-xs tracking-widest uppercase text-stone-500 font-semibold mb-1.5">Fecha *</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400"
+            />
+          </div>
+
+          {/* Título */}
+          <div>
+            <label className="block text-xs tracking-widest uppercase text-stone-500 font-semibold mb-1.5">Título *</label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Ej: Control de otitis externa"
+              autoFocus
+              className="w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400"
+            />
+          </div>
+
+          {/* Nota */}
+          <div>
+            <label className="block text-xs tracking-widest uppercase text-stone-500 font-semibold mb-1.5">Observaciones</label>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Hallazgos, tratamiento, dosis, lote, próxima dosis…"
+              rows={3}
+              className="w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400 resize-y placeholder:text-stone-400"
+            />
+          </div>
+
+          {/* Doctor */}
+          <div>
+            <label className="block text-xs tracking-widest uppercase text-stone-500 font-semibold mb-1.5">Profesional</label>
+            <input
+              type="text"
+              value={doctor}
+              onChange={(e) => setDoctor(e.target.value)}
+              placeholder="Dra. Romero"
+              className="w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400"
+            />
+          </div>
+        </div>
+
+        <div className="p-3.5 border-t border-stone-200 bg-white flex justify-end gap-2">
+          <button onClick={onClose} className="px-3 py-2 rounded-xl text-sm font-semibold bg-white border border-stone-200 hover:border-stone-400 text-stone-700">
+            Cancelar
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!canSave}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold bg-orange-600 hover:bg-orange-700 text-white disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed"
+          >
+            <Check size={12} /> {event.isNew ? "Crear" : "Guardar"}
+          </button>
         </div>
       </div>
     </div>
@@ -7488,9 +9163,9 @@ function AddPetModal({ clients, onClose, onAdd }) {
     if (!clientSearch.trim()) return clients;
     const q = clientSearch.toLowerCase();
     return clients.filter(c =>
-      c.name.toLowerCase().includes(q) ||
-      c.cedula.toLowerCase().includes(q) ||
-      c.phone.includes(q)
+      (c.name || "").toLowerCase().includes(q) ||
+      (c.cedula || "").toLowerCase().includes(q) ||
+      (c.phone || "").includes(q)
     );
   }, [clients, clientSearch]);
 
@@ -7503,6 +9178,7 @@ function AddPetModal({ clients, onClose, onAdd }) {
     { id: "rabbit", label: "Conejo", Icon: Rabbit },
     { id: "rodent", label: "Roedor", Icon: Rat },
     { id: "fish", label: "Pez", Icon: Fish },
+    { id: "other", label: "Otros", Icon: PawPrint },
   ];
 
   const canSubmit = pet.name.trim() && pet.species && pet.breed.trim() && selectedClientId;
@@ -7810,7 +9486,7 @@ function AddPetModal({ clients, onClose, onAdd }) {
 // El cliente queda marcado con quickRegistration: true y segment "Express"
 // para poder distinguirlo y ofrecer el "completar registro" después.
 
-function QuickClientModal({ onClose, clients = [], setClients, onCreated, onCreateSale }) {
+function QuickClientModal({ onClose, clients = [], setClients, onCreated, onCreateSale, user = null, activeSedeId = null }) {
   const [name, setName] = useState("");
   const [cedula, setCedula] = useState("");
   const [phone, setPhone] = useState("");
@@ -7866,6 +9542,13 @@ function QuickClientModal({ onClose, clients = [], setClients, onCreated, onCrea
       isNew: true,
       quickRegistration: true, // marca clave para ofrecer completar registro después
       notes: "",
+      // === sedeOrigenId ===
+      // Si el usuario tiene UNA sola sede asignada, queda con esa sede.
+      // Si está navegando dentro de una sede (activeSedeId), queda con esa.
+      // Si es super sin contexto, queda null (cliente global).
+      sedeOrigenId: (user?.sedeIds && user.sedeIds.length === 1)
+        ? user.sedeIds[0]
+        : (activeSedeId || null),
     };
     setClients(prev => [newClient, ...prev]);
     setCreated(newClient);
@@ -8164,7 +9847,7 @@ const WIZARD_STEPS = [
  { id: "E", num: 5, title: "Consulta clínica", tag: "Opcional", required: false, Icon: Stethoscope },
 ];
 
-function NewClientModal({ onClose, clients, setClients, passports, setPassports, onCreated, existingClient = null, userRole = "super", perm = {}, customModules = [], modules = [] }) {
+function NewClientModal({ onClose, clients, setClients, passports, setPassports, onCreated, existingClient = null, userRole = "super", perm = {}, customModules = [], modules = [], user = null, activeSedeId = null }) {
  // Si vamos a completar un registro rápido, empezamos en paso B (mascota) ya que A está lleno
  const [step, setStep] = useState(existingClient ? "B" : "A");
  const [completed, setCompleted] = useState(() => existingClient ? new Set(["A"]) : new Set());
@@ -8174,7 +9857,7 @@ function NewClientModal({ onClose, clients, setClients, passports, setPassports,
  // el selector de destino. Si solo hay un módulo disponible, se omite el paso.
  const [savedCode, setSavedCode] = useState(null); // código del pasaporte recién creado
  // Datos del cliente recién creado/actualizado, para que el padre pueda preseleccionarlo
- // (ej: en SaleBuilder al elegir destino "Crear factura") sin esperar al re-render del setClients.
+ // (ej: en SaleBuilder al elegir destino "Crear recibo") sin esperar al re-render del setClients.
  const [savedClientId, setSavedClientId] = useState(null);
  const [savedClient, setSavedClient] = useState(null);
  const [destination, setDestination] = useState(null); // 'vet' | 'grooming-ops' | 'sales' | 'clients' | customId
@@ -8199,7 +9882,7 @@ function NewClientModal({ onClose, clients, setClients, passports, setPassports,
    const can = (v) => canAccess(perm, v);
    if (can("vet")          && isInstalled("vet"))          list.push({ id: "vet",          label: moduleName("vet", "Veterinaria"),          Icon: Stethoscope, accent: "from-orange-500 to-orange-700",   desc: "Iniciar consulta clínica con la mascota recién registrada." });
    if (can("grooming-ops") && isInstalled("grooming-ops")) list.push({ id: "grooming-ops", label: moduleName("grooming-ops", "Atención Grooming"), Icon: Bath,        accent: "from-emerald-500 to-emerald-700", desc: "Reservar o iniciar servicio." });
-   if (can("sales"))                                       list.push({ id: "sales",        label: "Crear factura",                           Icon: Receipt,     accent: "from-purple-500 to-purple-700",   desc: "Facturar el servicio para esta mascota." });
+   if (can("sales"))                                       list.push({ id: "sales",        label: "Crear recibo",                           Icon: Receipt,     accent: "from-purple-500 to-purple-700",   desc: "Cobrar el servicio para esta mascota." });
    // Módulos custom configurados desde Ajustes → Módulos
    (customModules || []).forEach(m => {
      if (can(m.id)) list.push({ id: m.id, label: m.name || m.id, Icon: LayoutGrid, accent: "from-blue-500 to-blue-700", desc: m.description || "Módulo personalizado." });
@@ -8315,6 +9998,9 @@ function NewClientModal({ onClose, clients, setClients, passports, setPassports,
        isOrg: false,
        isNew: true, // marca para destacar en buscadores
        notes: "",
+       sedeOrigenId: (user?.sedeIds && user.sedeIds.length === 1)
+         ? user.sedeIds[0]
+         : (activeSedeId || null),
      };
      // Agregar al inicio para que aparezca primero en buscadores y listas
      setClients(prev => [newClient, ...prev]);
@@ -8795,6 +10481,7 @@ function StepPet({ pet, setPet }) {
  { id: "rabbit", label: "Conejo", Icon: Rabbit },
  { id: "rodent", label: "Roedor", Icon: Rat },
  { id: "fish", label: "Pez", Icon: Fish },
+ { id: "other", label: "Otros", Icon: PawPrint },
  ];
  return (
  <div>
@@ -8821,6 +10508,15 @@ function StepPet({ pet, setPet }) {
  );
  })}
  </div>
+ {pet.species === "other" && (
+ <input
+ value={pet.speciesOther || ""}
+ onChange={(e) => upd("speciesOther", e.target.value)}
+ placeholder="Especifica la especie (ej: hurón, iguana, tortuga…)"
+ autoFocus
+ className="mt-2 w-full px-3.5 py-2.5 bg-white border border-orange-300 rounded-xl text-sm outline-none focus:border-orange-500"
+ />
+ )}
  </div>
 
  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
@@ -9030,7 +10726,7 @@ function Field({ label, children }) {
 
 // ========== MODAL: CREAR MÓDULO ==========
 
-function CreateModuleModal({ onClose, onCreate, modules = [] }) {
+function CreateModuleModal({ onClose, onCreate, modules = [], sedes = [], activeSedeId = null }) {
  // Paso 1: elegir plantilla. Paso 2: configurar nombre/columnas/campos.
  const [step, setStep] = useState(1);
  const [template, setTemplate] = useState(null); // 'vet' | 'grooming' | 'custom'
@@ -9042,6 +10738,9 @@ function CreateModuleModal({ onClose, onCreate, modules = [] }) {
  ]);
  // Columnas del kanban — configurables por módulo. Cada plantilla trae un default.
  const [columns, setColumns] = useState([]);
+ // === Sede destino ===
+ // Por defecto la sede activa. El admin puede cambiar a otra sede si tiene varias.
+ const [targetSedeId, setTargetSedeId] = useState(activeSedeId || sedes?.[0]?.id || null);
 
  const TEMPLATES = [
    {
@@ -9115,9 +10814,15 @@ function CreateModuleModal({ onClose, onCreate, modules = [] }) {
    // Esto permite tener múltiples módulos del mismo kind (ej: 2 módulos grooming con
    // nombres distintos: "Grooming" + "Peluquería canina").
    const newId = `${template.kind}-${Date.now().toString(36)}`;
+   // Defaults estándar (features + cardFields) cloneados del módulo seed de Pet 1.
+   // Garantiza paridad funcional: cualquier nueva clínica/peluquería tiene Día 1 == Pet 1.
+   const defaults = getModuleDefaults(template.kind);
    onCreate({
      id: newId,
      kind: template.kind,
+     // sedeId: asociado a la sede activa o la seleccionada por el admin.
+     // Sin esto, el módulo "flota" y no aparece bajo ninguna sede en el filtro.
+     sedeId: targetSedeId,
      name: name.trim(),
      shortName: name.trim().slice(0, 16),
      role: (role.trim() || roleAuto),
@@ -9128,6 +10833,10 @@ function CreateModuleModal({ onClose, onCreate, modules = [] }) {
      meta: columns.slice(0, 3).map(c => c.label),
      columns: columns.map(c => ({ id: c.id, label: c.label.trim() })),
      fields: fields.filter(f => f.label.trim()),
+     // Features y cardFields heredados del estándar del kind. Garantiza
+     // que el nuevo módulo tenga TODA la funcionalidad de Pet 1.
+     features: defaults.features,
+     cardFields: defaults.cardFields,
      core: false,
      removed: false,
      createdAt: new Date().toISOString(),
@@ -9195,6 +10904,31 @@ function CreateModuleModal({ onClose, onCreate, modules = [] }) {
  {/* === PASO 2: Configuración del módulo === */}
  {step === 2 && template && (
  <div className="p-5 space-y-4">
+   {/* Selector de sede (solo si hay múltiples sedes activas) */}
+   {sedes.filter(s => s.active !== false).length > 1 && (
+     <Field label="Sede destino">
+       <div className="flex gap-1.5 flex-wrap">
+         {sedes.filter(s => s.active !== false).map(s => (
+           <button
+             key={s.id}
+             type="button"
+             onClick={() => setTargetSedeId(s.id)}
+             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition border ${
+               targetSedeId === s.id
+                 ? "bg-orange-600 text-white border-orange-600"
+                 : "bg-white text-stone-600 border-stone-200 hover:border-orange-300"
+             }`}
+           >
+             <MapPin size={11} /> {s.name}
+           </button>
+         ))}
+       </div>
+       <p className="text-xs text-stone-400 mt-1.5 leading-relaxed">
+         El módulo aparecerá bajo esta sede en el hub CRM. Los recibos y citas creados allí quedarán filtrados por sede.
+       </p>
+     </Field>
+   )}
+
    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
      <Field label="Nombre del módulo">
        <input
@@ -9531,7 +11265,42 @@ function FieldLevelSelector({ value, onChange, allowEdit = true }) {
   );
 }
 
-function RolesView({ permissions, setPermissions, modules = [], customRoles = [], setCustomRoles }) {
+// === Helper: sedes a las que pertenece un rol ===
+// La "sede de un rol" se deriva de sus assignedModuleIds: cada módulo (CRM) vive
+// en una sede concreta, así que las sedes del rol son las sedes únicas de esos
+// módulos. Un rol SIN assignedModuleIds no está restringido técnicamente →
+// se considera global (pertenece a todas las sedes).
+// Devuelve: { sedeIds, sedeNames, isGlobal, label, moduleCount }
+function getRoleSedes(role, modules = [], sedes = []) {
+  const moduleIds = role?.assignedModuleIds || [];
+  if (moduleIds.length === 0) {
+    return { sedeIds: [], sedeNames: [], isGlobal: true, label: "Todas las sedes", moduleCount: 0 };
+  }
+  const sedeIdSet = new Set();
+  moduleIds.forEach(mid => {
+    const m = (modules || []).find(mm => mm.id === mid);
+    if (m?.sedeId) sedeIdSet.add(m.sedeId);
+  });
+  const sedeIds = [...sedeIdSet];
+  const sedeNames = sedeIds.map(sid => {
+    const s = (sedes || []).find(ss => ss.id === sid);
+    return s?.name || "Sede";
+  });
+  let label;
+  if (sedeNames.length === 0) label = "Todas las sedes";
+  else if (sedeNames.length === 1) label = sedeNames[0];
+  else if (sedeNames.length === 2) label = sedeNames.join(" · ");
+  else label = `${sedeNames[0]} +${sedeNames.length - 1}`;
+  return {
+    sedeIds,
+    sedeNames,
+    isGlobal: sedeIds.length === 0,
+    label,
+    moduleCount: moduleIds.length,
+  };
+}
+
+function RolesView({ permissions, setPermissions, modules = [], customRoles = [], setCustomRoles, users = [], sedes = [] }) {
   const [selectedRole, setSelectedRole] = useState("vet");
   const [savedFlash, setSavedFlash] = useState(false);
   const [showCreateRole, setShowCreateRole] = useState(false);
@@ -9581,6 +11350,57 @@ function RolesView({ permissions, setPermissions, modules = [], customRoles = []
     }));
     return [...coresWithTags, ...customs];
   }, [customRoles]);
+
+  // === Agrupar roles por sede ===
+  // La idea: super y roles globales van a "Globales" (sin sede). Roles con usuarios
+  // asignados solo a una sede específica van a esa sección. Si los usuarios de un
+  // mismo rol están en sedes distintas, aparece en cada una.
+  // Si no hay usuarios todavía, todos los roles core caen en "Sin asignar".
+  const groupedRoles = useMemo(() => {
+    const groups = {
+      global: { id: "global", label: "Globales", desc: "Roles sin sede asignada (ven todo)", roles: [] },
+      // Una sección por cada sede activa
+      ...Object.fromEntries(
+        (sedes || []).filter(s => s.active !== false).map(s => [
+          s.id,
+          { id: s.id, label: `Sede · ${s.name}`, desc: `Roles asignados a usuarios de ${s.name}`, roles: [] }
+        ])
+      ),
+      unassigned: { id: "unassigned", label: "Sin asignar", desc: "Roles sin usuarios todavía", roles: [] },
+    };
+
+    roleOptions.forEach(role => {
+      // Super siempre es global (no se filtra por sede)
+      if (role.id === "super") {
+        groups.global.roles.push(role);
+        return;
+      }
+      // Para los demás roles, miramos qué sedes tienen usuarios con ese rol
+      const usersOfRole = (users || []).filter(u => u.role === role.id);
+      if (usersOfRole.length === 0) {
+        groups.unassigned.roles.push(role);
+        return;
+      }
+      // Sedes únicas de los usuarios de este rol
+      const sedesOfRole = new Set();
+      let hasGlobal = false;
+      usersOfRole.forEach(u => {
+        if (!u.sedeIds || u.sedeIds.length === 0) {
+          hasGlobal = true;
+        } else {
+          u.sedeIds.forEach(sid => sedesOfRole.add(sid));
+        }
+      });
+      // Si algún usuario es global (sedeIds vacío) → cae en globales también
+      if (hasGlobal) groups.global.roles.push(role);
+      // Y por cada sede a la que pertenece
+      sedesOfRole.forEach(sid => {
+        if (groups[sid]) groups[sid].roles.push(role);
+      });
+    });
+
+    return groups;
+  }, [roleOptions, users, sedes]);
 
   // === Vistas dinámicas: combinar fijas + módulos clonados ===
   // ALL_VIEWS solo incluye los módulos core (vet, grooming-ops, standard).
@@ -9718,8 +11538,40 @@ function RolesView({ permissions, setPermissions, modules = [], customRoles = []
 
   // Crear nuevo rol
   const handleCreateRole = (newRole) => {
-    // Generar permisos heredados del rol base
-    const inheritedPerm = { ...DEFAULT_ROLE_PERMISSIONS[newRole.inheritFrom] };
+    // Lista de roles base a heredar. Soporta el nuevo inheritFromList (multi) y
+    // cae al inheritFrom singular para roles creados con versiones anteriores.
+    const baseRoles = newRole.inheritFromList && newRole.inheritFromList.length > 0
+      ? newRole.inheritFromList
+      : [newRole.inheritFrom];
+
+    // Fusionar permisos de todos los roles base. La fusión es una UNIÓN:
+    // - views: unión de todas las vistas (si alguno tiene "*", el resultado es "*")
+    // - el resto de flags booleanos: OR lógico (si algún rol base lo permite, se permite)
+    let mergedPerm = null;
+    baseRoles.forEach(baseId => {
+      const base = DEFAULT_ROLE_PERMISSIONS[baseId];
+      if (!base) return;
+      if (!mergedPerm) {
+        mergedPerm = { ...base, views: base.views === "*" ? "*" : [...base.views] };
+        return;
+      }
+      // Fusionar views
+      if (mergedPerm.views === "*" || base.views === "*") {
+        mergedPerm.views = "*";
+      } else {
+        const set = new Set([...mergedPerm.views, ...base.views]);
+        mergedPerm.views = [...set];
+      }
+      // Fusionar el resto de claves booleanas con OR
+      Object.keys(base).forEach(key => {
+        if (key === "views" || key === "fields") return;
+        if (typeof base[key] === "boolean") {
+          mergedPerm[key] = mergedPerm[key] || base[key];
+        }
+      });
+    });
+    const inheritedPerm = mergedPerm || { ...DEFAULT_ROLE_PERMISSIONS.sales };
+
     // Si el rol tiene assignedModuleIds, agregar esos a las views automáticamente
     if (newRole.assignedModuleIds && newRole.assignedModuleIds.length > 0) {
       const baseViews = inheritedPerm.views === "*" ? [] : [...inheritedPerm.views];
@@ -9730,11 +11582,33 @@ function RolesView({ permissions, setPermissions, modules = [], customRoles = []
     }
     // Agregar al state de roles custom
     setCustomRoles?.(prev => [...prev, newRole]);
-    // Agregar permisos al state de permissions
-    setPermissions(prev => ({
-      ...prev,
-      [newRole.id]: { ...inheritedPerm, fields: prev[newRole.inheritFrom]?.fields || {} },
-    }));
+    // Agregar permisos al state de permissions.
+    // Los `fields` se FUSIONAN desde TODOS los roles base, no solo el primero.
+    // Antes se copiaba `prev[baseRoles[0]].fields` tal cual, lo que provocaba dos
+    // problemas: (1) un rol "Vet + Groomer" perdía las reglas propias de grooming,
+    // y (2) heredaba CRMs que el primer rol base traía abiertos por defaultLevel.
+    // La fusión usa el nivel MÁS permisivo por campo (edit > view > hidden),
+    // consistente con cómo se fusionan las `views` (unión).
+    setPermissions(prev => {
+      const RANK = { hidden: 0, view: 1, edit: 2 };
+      const mergedFields = {};
+      baseRoles.forEach(baseId => {
+        const baseFields = prev[baseId]?.fields || {};
+        Object.entries(baseFields).forEach(([crmId, crmFields]) => {
+          if (!mergedFields[crmId]) mergedFields[crmId] = {};
+          Object.entries(crmFields).forEach(([fieldKey, level]) => {
+            const current = mergedFields[crmId][fieldKey];
+            if (current == null || (RANK[level] ?? 1) > (RANK[current] ?? 1)) {
+              mergedFields[crmId][fieldKey] = level;
+            }
+          });
+        });
+      });
+      return {
+        ...prev,
+        [newRole.id]: { ...inheritedPerm, fields: mergedFields },
+      };
+    });
     // Seleccionar el rol recién creado
     setSelectedRole(newRole.id);
     setShowCreateRole(false);
@@ -9752,30 +11626,15 @@ function RolesView({ permissions, setPermissions, modules = [], customRoles = []
 
   return (
     <div className="space-y-5">
-      {/* Hero */}
-      <div className="relative p-6 rounded-2xl bg-gradient-to-br from-white via-orange-50 to-orange-100 border border-stone-200 overflow-hidden">
-        <div className="flex items-center gap-4 flex-wrap">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-500 to-orange-700 grid place-items-center text-white shadow-lg flex-shrink-0">
-            <ShieldCheck size={24} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold mb-1">
-              Administración · Control de acceso
-            </div>
-            <h2 className="font-serif text-3xl font-semibold leading-tight">
-              Roles <span className="italic text-orange-600">y permisos</span>
-            </h2>
-            <p className="text-sm text-stone-600 mt-1 max-w-2xl">
-              Define qué módulos puede ver cada rol. Los cambios aplican inmediatamente al próximo inicio de sesión.
-            </p>
-          </div>
-          {savedFlash && (
-            <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-emerald-100 text-emerald-800 text-xs font-semibold">
-              <Check size={13} strokeWidth={2.5} /> Cambios guardados
-            </span>
-          )}
+      {/* Banner flotante "Cambios guardados" — antes vivía dentro del hero.
+          Lo conservamos como elemento independiente: aparece solo cuando hay flash. */}
+      {savedFlash && (
+        <div className="flex justify-end">
+          <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-emerald-100 text-emerald-800 text-xs font-semibold">
+            <Check size={13} strokeWidth={2.5} /> Cambios guardados
+          </span>
         </div>
-      </div>
+      )}
 
       <div className="flex flex-col lg:flex-row gap-5">
         {/* Lista de roles */}
@@ -9794,7 +11653,21 @@ function RolesView({ permissions, setPermissions, modules = [], customRoles = []
             </button>
           </div>
           <div>
-            {roleOptions.map(r => {
+            {/* === Render agrupado por sede ===
+                Cada grupo (Globales, Pet 1, Pet 2, Sin asignar) muestra un header
+                y debajo sus roles. Si un grupo está vacío, no se muestra. */}
+            {Object.values(groupedRoles).map(group => {
+              if (group.roles.length === 0) return null;
+              return (
+                <div key={group.id}>
+                  <div className="px-4 py-2 bg-stone-50 border-b border-stone-200 flex items-baseline gap-2">
+                    <span className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">
+                      {group.label}
+                    </span>
+                    <span className="text-[10px] text-stone-400">·</span>
+                    <span className="text-[10px] text-stone-400 italic truncate">{group.desc}</span>
+                  </div>
+                  {group.roles.map(r => {
               const Icon = r.Icon;
               const active = selectedRole === r.id;
               const rPerm = permissions[r.id];
@@ -9882,6 +11755,9 @@ function RolesView({ permissions, setPermissions, modules = [], customRoles = []
                       </button>
                     )}
                   </div>
+                </div>
+              );
+            })}
                 </div>
               );
             })}
@@ -10049,6 +11925,7 @@ function RolesView({ permissions, setPermissions, modules = [], customRoles = []
         <CreateRoleModal
           modules={modules}
           customRoles={customRoles}
+          sedes={sedes}
           onCancel={() => setShowCreateRole(false)}
           onConfirm={handleCreateRole}
         />
@@ -10069,6 +11946,7 @@ function RolesView({ permissions, setPermissions, modules = [], customRoles = []
           role={roleOptions.find(r => r.id === editingTagsRoleId)}
           modules={modules}
           customRoles={customRoles}
+          sedes={sedes}
           onCancel={() => setEditingTagsRoleId(null)}
           onConfirm={(newTags, newModuleIds) => handleUpdateRoleTags(editingTagsRoleId, newTags, newModuleIds)}
         />
@@ -10133,7 +12011,7 @@ function ConfirmDeleteRoleModal({ roleLabel, onCancel, onConfirm }) {
 // Funciona tanto para roles core como custom. Solo edita assignedTags y assignedModuleIds.
 // Para los demás campos (nombre, color, hereda de, descripción), eso queda fuera —
 // los core no se pueden cambiar, y los custom se editan al recrearlos si hace falta.
-function EditRoleTagsModal({ role, modules = [], customRoles = [], onCancel, onConfirm }) {
+function EditRoleTagsModal({ role, modules = [], customRoles = [], sedes = [], onCancel, onConfirm }) {
   const [assignedTags, setAssignedTags] = useState(role?.assignedTags || []);
   const [assignedModuleIds, setAssignedModuleIds] = useState(role?.assignedModuleIds || []);
   const [tagInput, setTagInput] = useState("");
@@ -10216,6 +12094,10 @@ function EditRoleTagsModal({ role, modules = [], customRoles = [], onCancel, onC
   if (!role) return null;
   const Ic = role.Icon || LayoutGrid;
 
+  // Sede(s) actuales del rol — derivadas del estado LOCAL de assignedModuleIds
+  // para que el badge del header se actualice en vivo al marcar/desmarcar CRMs.
+  const liveSedeInfo = getRoleSedes({ assignedModuleIds }, modules, sedes);
+
   return (
     <div onClick={onCancel} className="fixed inset-0 bg-stone-900/80 z-50 flex justify-center items-start p-4 sm:p-12 overflow-y-auto">
       <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "calc(100vh - 6rem)" }}>
@@ -10229,6 +12111,13 @@ function EditRoleTagsModal({ role, modules = [], customRoles = [], onCancel, onC
               Editar etiquetas del rol
             </div>
             <h3 className="font-serif text-xl font-semibold mt-0.5 truncate">{role.label}</h3>
+            {/* Sede(s) del rol — visible siempre para identificar de un vistazo */}
+            <div className="flex items-center gap-1.5 mt-1">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/20 backdrop-blur text-[11px] font-semibold">
+                <MapPin size={10} strokeWidth={2.4} />
+                {liveSedeInfo.label}
+              </span>
+            </div>
           </div>
           <button onClick={onCancel} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 grid place-items-center transition flex-shrink-0">
             <X size={14} />
@@ -10324,7 +12213,18 @@ function EditRoleTagsModal({ role, modules = [], customRoles = [], onCancel, onC
                   <div className="text-xs text-stone-500 mt-0.5">
                     {assignedModuleIds.length === 0
                       ? "Sin restricciones"
-                      : `Restringido a ${assignedModuleIds.length} ${assignedModuleIds.length === 1 ? "sede" : "sedes"}`}
+                      : (() => {
+                          const sedeCount = new Set(
+                            assignedModuleIds
+                              .map(id => availableModules.find(m => m.id === id)?.sedeId)
+                              .filter(Boolean)
+                          ).size;
+                          const crmTxt = `${assignedModuleIds.length} ${assignedModuleIds.length === 1 ? "CRM" : "CRMs"}`;
+                          const sedeTxt = sedeCount > 0
+                            ? ` · ${sedeCount} ${sedeCount === 1 ? "sede" : "sedes"}`
+                            : "";
+                          return `Restringido a ${crmTxt}${sedeTxt}`;
+                        })()}
                   </div>
                 </div>
                 <ChevronRight
@@ -10335,39 +12235,103 @@ function EditRoleTagsModal({ role, modules = [], customRoles = [], onCancel, onC
               </button>
 
               {showTechnicalFilter && (
-                <div className="space-y-1.5">
-                  {availableModules.map(m => {
-                    const checked = assignedModuleIds.includes(m.id);
+                <div className="space-y-3">
+                  {(() => {
+                    // Agrupamos los CRMs por sede para que se distinga claramente
+                    // a qué sede pertenece cada uno (ej. "Clínica Veterinaria" de
+                    // Pet 1 vs la de Pet 2). Misma lógica que en CreateRoleModal.
+                    const groups = {};
+                    const noSede = [];
+                    availableModules.forEach(m => {
+                      if (m.sedeId) {
+                        if (!groups[m.sedeId]) groups[m.sedeId] = [];
+                        groups[m.sedeId].push(m);
+                      } else {
+                        noSede.push(m);
+                      }
+                    });
+                    const orderedSedeIds = [
+                      ...sedes.map(s => s.id).filter(id => groups[id]),
+                      ...Object.keys(groups).filter(id => !sedes.find(s => s.id === id)),
+                    ];
+
+                    const renderModuleButton = (m) => {
+                      const checked = assignedModuleIds.includes(m.id);
+                      return (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => toggleModule(m.id)}
+                          className={`w-full flex items-center gap-3 p-2.5 rounded-xl border-2 text-left transition ${
+                            checked
+                              ? "border-orange-300 bg-orange-50"
+                              : "border-stone-200 bg-white hover:border-stone-300"
+                          }`}
+                        >
+                          <div className={`w-5 h-5 rounded-md flex-shrink-0 grid place-items-center ${
+                            checked ? "bg-orange-600" : "border-2 border-stone-300"
+                          }`}>
+                            {checked && <Check size={11} className="text-white" strokeWidth={3} />}
+                          </div>
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider flex-shrink-0 ${
+                            m.kind === "vet" ? "bg-orange-100 text-orange-700" :
+                            m.kind === "grooming" ? "bg-emerald-100 text-emerald-700" :
+                            m.kind === "standard" ? "bg-blue-100 text-blue-700" :
+                            "bg-stone-100 text-stone-700"
+                          }`}>
+                            {m.kind}
+                          </span>
+                          <span className={`text-sm font-semibold flex-1 truncate ${checked ? "text-orange-900" : "text-stone-700"}`}>
+                            {m.name}
+                          </span>
+                        </button>
+                      );
+                    };
+
                     return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => toggleModule(m.id)}
-                        className={`w-full flex items-center gap-3 p-2.5 rounded-xl border-2 text-left transition ${
-                          checked
-                            ? "border-orange-300 bg-orange-50"
-                            : "border-stone-200 bg-white hover:border-stone-300"
-                        }`}
-                      >
-                        <div className={`w-5 h-5 rounded-md flex-shrink-0 grid place-items-center ${
-                          checked ? "bg-orange-600" : "border-2 border-stone-300"
-                        }`}>
-                          {checked && <Check size={11} className="text-white" strokeWidth={3} />}
-                        </div>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider flex-shrink-0 ${
-                          m.kind === "vet" ? "bg-orange-100 text-orange-700" :
-                          m.kind === "grooming" ? "bg-emerald-100 text-emerald-700" :
-                          m.kind === "standard" ? "bg-blue-100 text-blue-700" :
-                          "bg-stone-100 text-stone-700"
-                        }`}>
-                          {m.kind}
-                        </span>
-                        <span className={`text-sm font-semibold flex-1 truncate ${checked ? "text-orange-900" : "text-stone-700"}`}>
-                          {m.name}
-                        </span>
-                      </button>
+                      <>
+                        {orderedSedeIds.map(sedeId => {
+                          const sede = sedes.find(s => s.id === sedeId);
+                          const mods = groups[sedeId];
+                          const selectedInSede = mods.filter(m => assignedModuleIds.includes(m.id)).length;
+                          return (
+                            <div key={sedeId}>
+                              <div className="flex items-center gap-2 mb-1.5 px-1">
+                                <MapPin size={12} className="text-orange-600 flex-shrink-0" />
+                                <span className="text-xs font-bold text-stone-700 tracking-wide">
+                                  {sede?.name || "Sede desconocida"}
+                                </span>
+                                {sede?.isDefault && (
+                                  <span className="text-[9px] font-bold uppercase px-1.5 py-px rounded bg-orange-100 text-orange-700">
+                                    Principal
+                                  </span>
+                                )}
+                                <span className="text-[10px] text-stone-400">
+                                  {selectedInSede > 0 ? `${selectedInSede}/${mods.length} seleccionados` : `${mods.length} CRMs`}
+                                </span>
+                              </div>
+                              <div className="space-y-1.5 pl-2 border-l-2 border-stone-100">
+                                {mods.map(renderModuleButton)}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {noSede.length > 0 && (
+                          <div>
+                            <div className="flex items-center gap-2 mb-1.5 px-1">
+                              <AlertCircle size={12} className="text-stone-400 flex-shrink-0" />
+                              <span className="text-xs font-bold text-stone-500 tracking-wide">
+                                Sin sede asignada
+                              </span>
+                            </div>
+                            <div className="space-y-1.5 pl-2 border-l-2 border-stone-100">
+                              {noSede.map(renderModuleButton)}
+                            </div>
+                          </div>
+                        )}
+                      </>
                     );
-                  })}
+                  })()}
                 </div>
               )}
             </div>
@@ -10403,7 +12367,30 @@ function EditRoleTagsModal({ role, modules = [], customRoles = [], onCancel, onC
 // Por ahora, el state es local a la vista (no global), porque el sistema sigue
 // usando ACCOUNTS para el login. Cuando se agregue persistencia real, este state
 // pasa a ser global y ACCOUNTS se vuelve solo el seed.
-function UsersView({ users = [], setUsers, permissions = {}, customRoles = [], modules = [] }) {
+function UsersView({ users = [], setUsers, permissions = {}, customRoles = [], modules = [], sedes = [], currentUser = null, setCurrentUser = null }) {
+  // Helper: calcula el tiempo restante hasta expiresAt. Retorna { expired, label, urgency }
+  // - expired: true si ya pasó
+  // - label: texto "3d 5h", "12h 30m", "5m", "EXPIRADO"
+  // - urgency: "ok" (>2d) | "warn" (<2d) | "critical" (<6h) | "expired"
+  const formatTimeRemaining = (expiresAt) => {
+    if (!expiresAt) return null;
+    const now = Date.now();
+    const target = new Date(expiresAt).getTime();
+    const diff = target - now;
+    if (diff <= 0) return { expired: true, label: "EXPIRADO", urgency: "expired" };
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    let label;
+    if (days > 0) label = `${days}d ${hours}h`;
+    else if (hours > 0) label = `${hours}h ${minutes}m`;
+    else label = `${minutes}m`;
+    let urgency;
+    if (diff < 6 * 60 * 60 * 1000) urgency = "critical";
+    else if (diff < 2 * 24 * 60 * 60 * 1000) urgency = "warn";
+    else urgency = "ok";
+    return { expired: false, label, urgency };
+  };
   // Los usuarios vienen del state global (CricketApp) — sobreviven al cambio de vista
   // y al logout. ACCOUNTS solo se usa como seed inicial allá arriba.
 
@@ -10412,27 +12399,61 @@ function UsersView({ users = [], setUsers, permissions = {}, customRoles = [], m
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterRole, setFilterRole] = useState("all"); // "all" | <roleId>
+  // Tab: muestra usuarios permanentes (default) o temporales (con permisos limitados en tiempo)
+  const [userTab, setUserTab] = useState("permanent"); // "permanent" | "temporary"
+  // Mensaje de confirmación efímero tras guardar (feedback de que la acción funcionó)
+  const [saveConfirmation, setSaveConfirmation] = useState(null);
 
-  // Lista combinada de roles (core + custom) para el selector
+  // Lista combinada de roles (core + custom) para el selector.
+  // A cada rol le adjuntamos su `sedeInfo` (derivada de assignedModuleIds) para
+  // poder mostrar a qué sede pertenece. Los roles core toman sus assignedModuleIds
+  // de la entrada "shadow" (isCoreOverride) si existe; si no, son globales.
   const allRoles = useMemo(() => {
+    const shadows = (customRoles || []).filter(r => r.isCoreOverride);
+    const findShadow = (coreId) => shadows.find(s => s.shadowOf === coreId);
     const core = [
       { id: "super",    label: "Super usuario", color: "from-orange-500 to-orange-700" },
       { id: "vet",      label: "Veterinario",   color: "from-blue-500 to-blue-700" },
       { id: "grooming", label: "Groomer",       color: "from-emerald-500 to-emerald-700" },
       { id: "sales",    label: "Ventas",        color: "from-amber-500 to-amber-700" },
-    ];
+    ].map(r => {
+      const shadow = findShadow(r.id);
+      const assignedModuleIds = shadow?.assignedModuleIds || [];
+      return {
+        ...r,
+        assignedTags: shadow?.assignedTags || [],
+        assignedModuleIds,
+        // El super es global por definición — nunca se restringe a una sede.
+        sedeInfo: r.id === "super"
+          ? { sedeIds: [], sedeNames: [], isGlobal: true, label: "Todas las sedes", moduleCount: 0 }
+          : getRoleSedes({ assignedModuleIds }, modules, sedes),
+      };
+    });
     const customs = (customRoles || [])
       .filter(r => !r.isCoreOverride)
-      .map(r => ({ id: r.id, label: r.label, color: r.color, assignedTags: r.assignedTags || [] }));
+      .map(r => ({
+        id: r.id,
+        label: r.label,
+        color: r.color,
+        assignedTags: r.assignedTags || [],
+        assignedModuleIds: r.assignedModuleIds || [],
+        sedeInfo: getRoleSedes(r, modules, sedes),
+      }));
     return [...core, ...customs];
-  }, [customRoles]);
+  }, [customRoles, modules, sedes]);
 
   // Resolver datos del rol asignado (label, color, etiquetas)
   const resolveRole = (roleId) => allRoles.find(r => r.id === roleId);
 
-  // Filtrar usuarios según búsqueda y filtro de rol
+  // Filtrar usuarios según tab, búsqueda y rol
   const filteredUsers = useMemo(() => {
     let list = users;
+    // Tab: permanente (no tiene expiresAt) vs temporal (sí tiene)
+    if (userTab === "temporary") {
+      list = list.filter(u => u.temporary && u.temporary.expiresAt);
+    } else {
+      list = list.filter(u => !u.temporary || !u.temporary.expiresAt);
+    }
     if (filterRole !== "all") list = list.filter(u => u.role === filterRole);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -10442,12 +12463,32 @@ function UsersView({ users = [], setUsers, permissions = {}, customRoles = [], m
       );
     }
     return list;
-  }, [users, searchQuery, filterRole]);
+  }, [users, searchQuery, filterRole, userTab]);
+
+  // Contadores para los tabs
+  const permanentCount = users.filter(u => !u.temporary || !u.temporary.expiresAt).length;
+  const temporaryCount = users.filter(u => u.temporary && u.temporary.expiresAt).length;
 
   // Crear o actualizar usuario
   const handleSaveUser = (userData) => {
+    const passwordChanged = !!userData.password;
     if (editingUser) {
-      setUsers(prev => prev.map(u => u.id === editingUser.id ? { ...u, ...userData } : u));
+      // Actualizar en la lista global. userData puede incluir password (si se cambió),
+      // temporary (config o null), name, email, role.
+      const updatedUser = { ...editingUser, ...userData };
+      setUsers(prev => prev.map(u => u.id === editingUser.id ? updatedUser : u));
+      // Si el usuario editado es el que está logueado en esta sesión, sincronizamos
+      // la sesión para que los cambios (rol, nombre, password) tengan efecto inmediato
+      // sin necesidad de cerrar sesión. Esto cubre el caso "edité mi propia cuenta".
+      if (setCurrentUser && currentUser && currentUser.id === editingUser.id) {
+        setCurrentUser(prev => ({ ...prev, ...userData }));
+      }
+      // Feedback explícito: confirma qué se guardó. Si cambió la contraseña, lo dice.
+      setSaveConfirmation({
+        type: "edit",
+        name: updatedUser.name,
+        passwordChanged,
+      });
     } else {
       const role = resolveRole(userData.role);
       const newUser = {
@@ -10456,12 +12497,17 @@ function UsersView({ users = [], setUsers, permissions = {}, customRoles = [], m
         roleLabel: role?.label || "Sin rol",
         initials: userData.name.split(" ").map(p => p[0]).join("").slice(0, 2).toUpperCase(),
         active: true,
+        // sedeIds por defecto: super ve todas ([]), otros la sede principal
+        sedeIds: userData.role === "super" ? [] : ["sede-pet1"],
         createdAt: new Date().toISOString(),
       };
       setUsers(prev => [...prev, newUser]);
+      setSaveConfirmation({ type: "create", name: newUser.name, passwordChanged: true });
     }
     setShowCreate(false);
     setEditingUser(null);
+    // El mensaje se auto-oculta a los 5 segundos
+    setTimeout(() => setSaveConfirmation(null), 5000);
   };
 
   // Toggle activo/inactivo
@@ -10484,32 +12530,80 @@ function UsersView({ users = [], setUsers, permissions = {}, customRoles = [], m
 
   return (
     <div className="space-y-5">
-      {/* Hero */}
-      <div className="relative p-6 rounded-2xl bg-gradient-to-br from-white via-amber-50 to-orange-100 border border-stone-200 overflow-hidden">
-        <div className="flex items-center gap-4 flex-wrap">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 grid place-items-center text-white shadow-lg flex-shrink-0">
-            <UserPlus size={24} />
+      {/* Acción principal de la vista — antes vivía dentro del hero junto al título.
+          Ahora vive sola, alineada a la derecha, para mantener acceso rápido sin
+          ocupar el espacio del hero. */}
+      <div className="flex justify-end">
+        <button
+          onClick={() => { setEditingUser(null); setShowCreate(true); }}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm shadow"
+        >
+          <Plus size={16} strokeWidth={2.4} />
+          Crear usuario
+        </button>
+      </div>
+
+      {/* Tabs: Permanentes vs Temporales.
+          Los temporales son usuarios con permisos limitados en tiempo (acceso por X días),
+          típicamente para suplentes, freelancers, contratistas o consultores externos. */}
+      <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-1 inline-flex gap-1">
+        <button
+          onClick={() => setUserTab("permanent")}
+          className={`px-4 py-2 rounded-xl text-sm font-semibold transition flex items-center gap-2 ${
+            userTab === "permanent"
+              ? "bg-stone-900 text-white shadow"
+              : "text-stone-600 hover:bg-stone-100"
+          }`}
+        >
+          <Users size={13} />
+          Permanentes
+          <span className={`text-xs font-bold px-1.5 py-px rounded-full ${
+            userTab === "permanent" ? "bg-white text-stone-900" : "bg-stone-100 text-stone-600"
+          }`}>
+            {permanentCount}
+          </span>
+        </button>
+        <button
+          onClick={() => setUserTab("temporary")}
+          className={`px-4 py-2 rounded-xl text-sm font-semibold transition flex items-center gap-2 ${
+            userTab === "temporary"
+              ? "bg-amber-600 text-white shadow"
+              : "text-stone-600 hover:bg-stone-100"
+          }`}
+        >
+          <Clock size={13} />
+          Temporales
+          <span className={`text-xs font-bold px-1.5 py-px rounded-full ${
+            userTab === "temporary" ? "bg-white text-amber-700" : "bg-amber-100 text-amber-700"
+          }`}>
+            {temporaryCount}
+          </span>
+        </button>
+      </div>
+
+      {/* Mensaje de confirmación tras guardar — feedback claro de que la acción funcionó */}
+      {saveConfirmation && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 flex items-center gap-3">
+          <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 grid place-items-center flex-shrink-0">
+            <CheckCircle size={16} />
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs tracking-widest uppercase text-amber-700 font-semibold mb-1">
-              Equipo · Cuentas
-            </div>
-            <h2 className="font-serif text-2xl font-semibold leading-tight">
-              <span className="text-amber-700">{stats.total}</span> usuarios registrados
-            </h2>
-            <p className="text-xs text-stone-500 mt-1">
-              {stats.active} activos · {stats.inactive} inactivos
-            </p>
+          <div className="flex-1 min-w-0 text-sm">
+            <span className="font-semibold text-emerald-900">
+              {saveConfirmation.type === "create" ? "Usuario creado: " : "Cambios guardados: "}
+            </span>
+            <span className="text-emerald-800">{saveConfirmation.name}</span>
+            {saveConfirmation.passwordChanged && saveConfirmation.type === "edit" && (
+              <span className="text-emerald-700"> · La contraseña fue actualizada correctamente.</span>
+            )}
           </div>
           <button
-            onClick={() => { setEditingUser(null); setShowCreate(true); }}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm shadow"
+            onClick={() => setSaveConfirmation(null)}
+            className="w-7 h-7 rounded-md hover:bg-emerald-100 text-emerald-600 grid place-items-center flex-shrink-0"
           >
-            <Plus size={16} strokeWidth={2.4} />
-            Crear usuario
+            <X size={13} />
           </button>
         </div>
-      </div>
+      )}
 
       {/* Filtros */}
       <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-3 flex items-center gap-3 flex-wrap">
@@ -10568,20 +12662,15 @@ function UsersView({ users = [], setUsers, permissions = {}, customRoles = [], m
           </div>
         ) : (
           <div>
-            {/* Header */}
-            <div className="hidden md:grid grid-cols-[auto_1fr_auto_auto_auto] gap-4 px-5 py-3 border-b border-stone-200 bg-stone-50 text-xs tracking-wider uppercase text-stone-500 font-semibold">
-              <div className="w-10"></div>
-              <div>Usuario</div>
-              <div>Rol</div>
-              <div>Estado</div>
-              <div className="w-20 text-right">Acciones</div>
-            </div>
+            {/* Sin header de tabla: las filas se explican solas (avatar, nombre,
+                rol como badge, toggle de estado, botones de acción). Un header
+                con "USUARIO / ROL / ESTADO" solo ocupaba espacio. */}
             {filteredUsers.map(u => {
               const role = resolveRole(u.role);
               return (
                 <div
                   key={u.id}
-                  className="grid grid-cols-[auto_1fr_auto] md:grid-cols-[auto_1fr_auto_auto_auto] gap-4 px-5 py-3 border-b border-stone-200 last:border-b-0 items-center hover:bg-stone-50 transition"
+                  className="grid grid-cols-[auto_1fr_auto] sm:grid-cols-[auto_1fr_minmax(140px,auto)_auto_auto] gap-4 px-5 py-3 border-b border-stone-200 last:border-b-0 items-center hover:bg-stone-50 transition"
                 >
                   {/* Avatar */}
                   <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${role?.color || "from-stone-400 to-stone-600"} grid place-items-center text-white text-sm font-bold flex-shrink-0 ${u.active ? "" : "opacity-40 grayscale"}`}>
@@ -10595,13 +12684,26 @@ function UsersView({ users = [], setUsers, permissions = {}, customRoles = [], m
                     <div className="text-xs text-stone-500 truncate">{u.email}</div>
                   </div>
                   {/* Rol con etiquetas */}
-                  <div className="min-w-0 hidden md:block">
-                    <div className={`text-xs font-semibold px-2 py-1 rounded-md inline-block ${
-                      role
-                        ? `bg-gradient-to-br ${role.color} text-white`
-                        : "bg-stone-100 text-stone-500"
-                    }`}>
-                      {role?.label || "Sin rol"}
+                  <div className="min-w-0 hidden sm:block">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <div className={`text-xs font-semibold px-2 py-1 rounded-md inline-block ${
+                        role
+                          ? `bg-gradient-to-br ${role.color} text-white`
+                          : "bg-stone-100 text-stone-500"
+                      }`}>
+                        {role?.label || "Sin rol"}
+                      </div>
+                      {/* Sede del rol — para distinguir roles homónimos de sedes distintas */}
+                      {role?.sedeInfo && (
+                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold ${
+                          role.sedeInfo.isGlobal
+                            ? "bg-stone-100 text-stone-500"
+                            : "bg-orange-100 text-orange-700"
+                        }`}>
+                          <MapPin size={9} strokeWidth={2.4} />
+                          {role.sedeInfo.label}
+                        </span>
+                      )}
                     </div>
                     {role?.assignedTags?.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1">
@@ -10612,20 +12714,58 @@ function UsersView({ users = [], setUsers, permissions = {}, customRoles = [], m
                         ))}
                       </div>
                     )}
+                    {/* Badge de tiempo restante si el usuario es temporal */}
+                    {u.temporary?.expiresAt && (() => {
+                      const t = formatTimeRemaining(u.temporary.expiresAt);
+                      if (!t) return null;
+                      const colorMap = {
+                        ok:       "bg-amber-100 text-amber-700",
+                        warn:     "bg-orange-100 text-orange-700",
+                        critical: "bg-red-100 text-red-700 animate-pulse",
+                        expired:  "bg-red-600 text-white",
+                      };
+                      return (
+                        <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md inline-flex items-center gap-1 mt-1 ${colorMap[t.urgency]}`}
+                             title={t.expired
+                               ? "Acceso temporal vencido. El usuario fue desactivado automáticamente."
+                               : `Expira: ${new Date(u.temporary.expiresAt).toLocaleString()}`}
+                        >
+                          <Clock size={9} />
+                          {t.expired ? "EXPIRADO" : `Expira en ${t.label}`}
+                        </div>
+                      );
+                    })()}
                   </div>
-                  {/* Toggle activo */}
-                  <div className="hidden md:block">
-                    <button
-                      onClick={() => toggleActive(u.id)}
-                      title={u.active ? "Desactivar usuario" : "Activar usuario"}
-                      className={`w-10 h-6 rounded-full relative transition ${
-                        u.active ? "bg-emerald-500" : "bg-stone-300"
-                      }`}
-                    >
-                      <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition ${
-                        u.active ? "left-5" : "left-1"
-                      }`}></span>
-                    </button>
+                  {/* Toggle activo. Si la cuenta temporal está vencida, el toggle queda
+                      bloqueado en "inactivo" hasta que el admin extienda la fecha. */}
+                  <div className="hidden sm:flex justify-center w-12">
+                    {(() => {
+                      const t = u.temporary?.expiresAt ? formatTimeRemaining(u.temporary.expiresAt) : null;
+                      const isExpired = t?.expired;
+                      const effectivelyActive = u.active && !isExpired;
+                      return (
+                        <button
+                          onClick={() => {
+                            if (isExpired) {
+                              alert("Este acceso temporal ha vencido. Edita al usuario y extiende la fecha de expiración para reactivarlo.");
+                              return;
+                            }
+                            toggleActive(u.id);
+                          }}
+                          title={isExpired
+                            ? "Acceso temporal vencido. Extiende la fecha para reactivar."
+                            : (u.active ? "Desactivar usuario" : "Activar usuario")}
+                          className={`w-10 h-6 rounded-full relative transition ${
+                            isExpired ? "bg-red-300 cursor-not-allowed" :
+                            effectivelyActive ? "bg-emerald-500" : "bg-stone-300"
+                          }`}
+                        >
+                          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition ${
+                            effectivelyActive && !isExpired ? "left-5" : "left-1"
+                          }`}></span>
+                        </button>
+                      );
+                    })()}
                   </div>
                   {/* Acciones */}
                   <div className="flex items-center gap-1 justify-end">
@@ -10656,6 +12796,7 @@ function UsersView({ users = [], setUsers, permissions = {}, customRoles = [], m
         <UserFormModal
           user={editingUser}
           allRoles={allRoles}
+          permissions={permissions}
           onCancel={() => { setShowCreate(false); setEditingUser(null); }}
           onConfirm={handleSaveUser}
         />
@@ -10715,25 +12856,150 @@ function UsersView({ users = [], setUsers, permissions = {}, customRoles = [], m
 }
 
 // ========== MODAL: Crear / Editar usuario ==========
-function UserFormModal({ user = null, allRoles = [], onCancel, onConfirm }) {
+function UserFormModal({ user = null, allRoles = [], permissions = {}, onCancel, onConfirm }) {
   const isEdit = !!user;
+  // Pestañas del modal: datos básicos vs. permisos específicos del usuario.
+  const [activeTab, setActiveTab] = useState("datos"); // "datos" | "permisos"
   const [name, setName] = useState(user?.name || "");
   const [email, setEmail] = useState(user?.email || "");
   const [password, setPassword] = useState("");
+  // Mostrar/ocultar el texto del password mientras se escribe (para confirmar visualmente)
+  const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState(user?.role || allRoles[0]?.id || "vet");
+  // === Overrides de permisos a nivel usuario ===
+  // Estructura: { [crmId]: { "section.field": "hidden"|"view"|"edit" } }
+  // Solo guarda los campos que el admin cambió respecto al default del rol.
+  // Al cambiar de rol se limpian, porque la baseline (defaults) cambia.
+  const [permissionOverrides, setPermissionOverrides] = useState(
+    () => user?.permissionOverrides ? JSON.parse(JSON.stringify(user.permissionOverrides)) : {}
+  );
+  // Acceso temporal: si está activo, los permisos del usuario expiran en una fecha.
+  // Si el usuario ya tenía configuración temporal, la heredamos en edición.
+  const [isTemporary, setIsTemporary] = useState(!!user?.temporary?.expiresAt);
+  // Formato compatible con <input type="datetime-local">: YYYY-MM-DDTHH:MM
+  // Default: hoy + 7 días a las 18:00 (un valor "razonable" para suplencias semanales).
+  const toLocalDt = (d) => {
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const defaultExpiry = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    d.setHours(18, 0, 0, 0);
+    return toLocalDt(d);
+  };
+  const [expiresAt, setExpiresAt] = useState(
+    user?.temporary?.expiresAt
+      ? toLocalDt(new Date(user.temporary.expiresAt))
+      : defaultExpiry()
+  );
+  const [temporaryReason, setTemporaryReason] = useState(user?.temporary?.reason || "");
+
+  // Presets rápidos para el tiempo de expiración
+  const applyPreset = (days, hours = 0) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    if (hours) d.setHours(d.getHours() + hours);
+    setExpiresAt(toLocalDt(d));
+  };
 
   const valid = name.trim().length >= 2 && email.includes("@") && (isEdit || password.length >= 4);
 
   const selectedRole = allRoles.find(r => r.id === role);
+  const isSuperRole = role === "super";
+
+  // Al cambiar de rol, los overrides quedan obsoletos (su baseline era otra).
+  const changeRole = (newRoleId) => {
+    if (newRoleId === role) return;
+    setRole(newRoleId);
+    setPermissionOverrides({});
+  };
+
+  // Nivel que el ROL asignado da a un campo (la baseline, sin overrides).
+  const roleLevelFor = (crmId, sectionId, fieldId) =>
+    getFieldLevel(permissions, role, crmId, sectionId, fieldId);
+
+  // Nivel EFECTIVO del campo para este usuario = override si existe, si no el del rol.
+  const effectiveLevelFor = (crmId, sectionId, fieldId) => {
+    const key = `${sectionId}.${fieldId}`;
+    const ov = permissionOverrides?.[crmId]?.[key];
+    return ov != null ? ov : roleLevelFor(crmId, sectionId, fieldId);
+  };
+
+  // Cambiar el nivel de un campo. Si el nuevo nivel coincide con el default del
+  // rol, se elimina el override (para no acumular ruido); si difiere, se guarda.
+  const setFieldLevel = (crmId, sectionId, fieldId, level) => {
+    const key = `${sectionId}.${fieldId}`;
+    const roleLevel = roleLevelFor(crmId, sectionId, fieldId);
+    setPermissionOverrides(prev => {
+      const next = { ...prev, [crmId]: { ...(prev[crmId] || {}) } };
+      if (level === roleLevel) {
+        delete next[crmId][key];
+      } else {
+        next[crmId][key] = level;
+      }
+      if (Object.keys(next[crmId]).length === 0) delete next[crmId];
+      return next;
+    });
+  };
+
+  // Cuántos campos están personalizados (difieren del rol). Para el badge del tab.
+  const overrideCount = Object.values(permissionOverrides)
+    .reduce((sum, fields) => sum + Object.keys(fields || {}).length, 0);
+
+  // Limpiar todos los overrides (volver 100% a los permisos del rol).
+  const resetAllOverrides = () => setPermissionOverrides({});
 
   const handleConfirm = () => {
     if (!valid) return;
+    // Si se escribió una contraseña nueva (en creación o edición), validar largo mínimo.
+    // En edición el campo puede quedar vacío (= no cambiar), pero si se escribe algo,
+    // debe cumplir el mínimo.
+    if (password && password.length < 4) {
+      alert("La contraseña debe tener al menos 4 caracteres.");
+      return;
+    }
+    // Si es temporal, validamos que la fecha sea futura
+    if (isTemporary) {
+      const target = new Date(expiresAt).getTime();
+      if (isNaN(target) || target <= Date.now()) {
+        alert("La fecha de expiración debe ser en el futuro.");
+        return;
+      }
+    }
+    // Limpiar overrides vacíos. Si el rol es super, no tiene sentido guardar
+    // overrides (super edita todo) — se descartan.
+    const cleanedOverrides = (() => {
+      if (isSuperRole) return null;
+      const out = {};
+      Object.entries(permissionOverrides).forEach(([crmId, fields]) => {
+        const entries = Object.entries(fields || {});
+        if (entries.length > 0) out[crmId] = Object.fromEntries(entries);
+      });
+      return Object.keys(out).length > 0 ? out : null;
+    })();
     onConfirm({
       name: name.trim(),
       email: email.trim().toLowerCase(),
-      ...(password ? { password } : {}),
+      // Solo incluimos password si se escribió algo. El trim evita guardar espacios.
+      // Junto al password guardamos un timestamp para mostrar "última actualización".
+      ...(password.trim()
+        ? { password: password.trim(), passwordUpdatedAt: new Date().toISOString() }
+        : {}),
       role,
       roleLabel: selectedRole?.label || "Sin rol",
+      // Overrides de permisos a nivel usuario. null = sin personalización
+      // (el usuario usa los permisos de su rol tal cual).
+      permissionOverrides: cleanedOverrides,
+      // Si activamos temporal, guardamos la config. Si lo desactivamos, ponemos
+      // explícitamente null para borrar la configuración previa.
+      temporary: isTemporary
+        ? {
+            expiresAt: new Date(expiresAt).toISOString(),
+            reason: temporaryReason.trim() || null,
+            grantedAt: user?.temporary?.grantedAt || new Date().toISOString(),
+          }
+        : null,
     });
   };
 
@@ -10758,7 +13024,39 @@ function UserFormModal({ user = null, allRoles = [], onCancel, onConfirm }) {
           </button>
         </div>
 
-        {/* Body */}
+        {/* Tabs: Datos / Permisos específicos */}
+        <div className="flex border-b border-stone-200 bg-stone-50 flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setActiveTab("datos")}
+            className={`flex-1 px-4 py-2.5 text-sm font-semibold transition flex items-center justify-center gap-2 border-b-2 ${
+              activeTab === "datos"
+                ? "text-orange-700 border-orange-600 bg-white"
+                : "text-stone-500 border-transparent hover:text-stone-700"
+            }`}
+          >
+            <UserPlus size={14} /> Datos
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("permisos")}
+            className={`flex-1 px-4 py-2.5 text-sm font-semibold transition flex items-center justify-center gap-2 border-b-2 ${
+              activeTab === "permisos"
+                ? "text-orange-700 border-orange-600 bg-white"
+                : "text-stone-500 border-transparent hover:text-stone-700"
+            }`}
+          >
+            <ShieldCheck size={14} /> Permisos específicos
+            {overrideCount > 0 && (
+              <span className="text-[10px] font-bold px-1.5 py-px rounded-full bg-orange-600 text-white">
+                {overrideCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Body — Pestaña DATOS */}
+        {activeTab === "datos" && (
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           <div>
             <label className="text-xs tracking-widest uppercase text-stone-500 font-semibold block mb-1.5">
@@ -10791,16 +13089,52 @@ function UserFormModal({ user = null, allRoles = [], onCancel, onConfirm }) {
             <label className="text-xs tracking-widest uppercase text-stone-500 font-semibold block mb-1.5">
               Contraseña {isEdit ? "" : <span className="text-red-500">*</span>}
             </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={isEdit ? "Dejar en blanco para no cambiar" : "Mínimo 4 caracteres"}
-              className="w-full px-3.5 py-2.5 bg-white border-2 border-stone-200 focus:border-orange-400 rounded-xl text-sm outline-none transition"
-            />
-            {isEdit && (
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={isEdit ? "Dejar en blanco para no cambiar" : "Mínimo 4 caracteres"}
+                className="w-full px-3.5 py-2.5 pr-10 bg-white border-2 border-stone-200 focus:border-orange-400 rounded-xl text-sm outline-none transition"
+              />
+              {/* Botón ojito: permite ver lo que se está escribiendo para confirmar */}
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                title={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 grid place-items-center text-stone-400 hover:text-stone-700 transition"
+              >
+                {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+            {/* Feedback: estado de la contraseña.
+                - Si escribiste algo: confirmación de que se cambiará al guardar
+                - Si está vacío en edición: aclaración + última vez que se cambió
+                - Si está vacío en creación: pista del mínimo */}
+            {password.trim() ? (
+              <div className={`text-xs mt-1.5 flex items-center gap-1 font-medium ${
+                password.trim().length >= 4 ? "text-emerald-700" : "text-amber-700"
+              }`}>
+                {password.trim().length >= 4 ? (
+                  <><CheckCircle size={11} /> Se actualizará al guardar los cambios</>
+                ) : (
+                  <><AlertCircle size={11} /> Mínimo 4 caracteres ({password.trim().length}/4)</>
+                )}
+              </div>
+            ) : isEdit ? (
+              <div className="text-xs text-stone-500 mt-1.5 flex items-center gap-1.5">
+                <Lock size={11} className="text-stone-400" />
+                <span>
+                  Contraseña configurada.
+                  {user?.passwordUpdatedAt && (
+                    <> Última actualización: {new Date(user.passwordUpdatedAt).toLocaleDateString()}</>
+                  )}
+                  {" "}Deja el campo vacío para mantenerla.
+                </span>
+              </div>
+            ) : (
               <div className="text-xs text-stone-500 mt-1.5">
-                Solo escribe aquí si quieres cambiar la contraseña actual
+                Mínimo 4 caracteres.
               </div>
             )}
           </div>
@@ -10810,39 +13144,261 @@ function UserFormModal({ user = null, allRoles = [], onCancel, onConfirm }) {
               Rol asignado
             </label>
             <div className="space-y-1.5">
-              {allRoles.map(r => (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => setRole(r.id)}
-                  className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition ${
-                    role === r.id
-                      ? "border-orange-300 bg-orange-50"
-                      : "border-stone-200 bg-white hover:border-stone-300"
-                  }`}
-                >
-                  <div className={`w-5 h-5 rounded-full mt-0.5 flex-shrink-0 grid place-items-center ${
-                    role === r.id ? "bg-orange-600" : "bg-stone-200"
-                  }`}>
-                    {role === r.id && <Check size={11} className="text-white" strokeWidth={3} />}
-                  </div>
-                  <div className={`text-xs font-bold px-2 py-1 rounded-md bg-gradient-to-br ${r.color} text-white flex-shrink-0`}>
-                    {r.label}
-                  </div>
-                  {r.assignedTags?.length > 0 && (
-                    <div className="flex flex-wrap gap-1 flex-1 min-w-0">
-                      {r.assignedTags.slice(0, 2).map(t => (
-                        <span key={t} className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-orange-100 text-orange-700 truncate">
-                          📍 {t}
-                        </span>
-                      ))}
+              {allRoles.map(r => {
+                const sedeInfo = r.sedeInfo || { isGlobal: true, label: "Todas las sedes" };
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => changeRole(r.id)}
+                    className={`w-full flex items-center gap-2.5 p-3 rounded-xl border-2 text-left transition ${
+                      role === r.id
+                        ? "border-orange-300 bg-orange-50"
+                        : "border-stone-200 bg-white hover:border-stone-300"
+                    }`}
+                  >
+                    <div className={`w-5 h-5 rounded-full flex-shrink-0 grid place-items-center ${
+                      role === r.id ? "bg-orange-600" : "bg-stone-200"
+                    }`}>
+                      {role === r.id && <Check size={11} className="text-white" strokeWidth={3} />}
                     </div>
-                  )}
-                </button>
-              ))}
+                    <div className={`text-xs font-bold px-2 py-1 rounded-md bg-gradient-to-br ${r.color} text-white flex-shrink-0`}>
+                      {r.label}
+                    </div>
+                    {/* Sede del rol — chip siempre visible para distinguir a qué
+                        sede pertenece. "Todas las sedes" para roles globales. */}
+                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold flex-shrink-0 ${
+                      sedeInfo.isGlobal
+                        ? "bg-stone-100 text-stone-500"
+                        : "bg-orange-100 text-orange-700"
+                    }`}>
+                      <MapPin size={9} strokeWidth={2.4} />
+                      {sedeInfo.label}
+                    </span>
+                    {r.assignedTags?.length > 0 && (
+                      <div className="flex flex-wrap gap-1 flex-1 min-w-0 justify-end">
+                        {r.assignedTags.slice(0, 2).map(t => (
+                          <span key={t} className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-orange-100 text-orange-700 truncate">
+                            📍 {t}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
+
+          {/* Sección de acceso temporal.
+              El admin puede activar un toggle para que los permisos del usuario
+              expiren automáticamente en una fecha+hora. Ideal para suplencias,
+              freelancers, contratistas o cualquier acceso con tiempo limitado. */}
+          <div className="p-4 border-t border-stone-200 bg-amber-50/30">
+            <button
+              type="button"
+              onClick={() => setIsTemporary(!isTemporary)}
+              className="w-full flex items-center gap-3 text-left"
+            >
+              <div className={`w-10 h-6 rounded-full relative transition flex-shrink-0 ${
+                isTemporary ? "bg-amber-600" : "bg-stone-300"
+              }`}>
+                <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition ${
+                  isTemporary ? "left-5" : "left-1"
+                }`}></span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-bold text-stone-900 flex items-center gap-1.5">
+                  <Clock size={12} className="text-amber-700" />
+                  Acceso temporal
+                </div>
+                <div className="text-[11px] text-stone-500">
+                  Los permisos expiran automáticamente en la fecha que elijas.
+                </div>
+              </div>
+            </button>
+
+            {isTemporary && (
+              <div className="mt-3 space-y-3 pl-1">
+                {/* Presets rápidos */}
+                <div className="flex flex-wrap gap-1.5">
+                  <span className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold self-center mr-1">Atajos:</span>
+                  {[
+                    { label: "1 día",    days: 1 },
+                    { label: "3 días",   days: 3 },
+                    { label: "1 semana", days: 7 },
+                    { label: "2 semanas",days: 14 },
+                    { label: "1 mes",    days: 30 },
+                  ].map(p => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      onClick={() => applyPreset(p.days)}
+                      className="text-[11px] font-semibold px-2 py-1 rounded-md bg-white border border-amber-200 hover:bg-amber-100 text-amber-700"
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Date-picker */}
+                <div>
+                  <label className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold block mb-1">
+                    Expira el
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={expiresAt}
+                    onChange={(e) => setExpiresAt(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-stone-200 outline-none focus:border-amber-500 text-sm"
+                  />
+                </div>
+
+                {/* Motivo opcional */}
+                <div>
+                  <label className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold block mb-1">
+                    Motivo (opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={temporaryReason}
+                    onChange={(e) => setTemporaryReason(e.target.value)}
+                    placeholder="Ej: Suplencia de Dra. Romero por vacaciones"
+                    className="w-full px-3 py-2 rounded-lg border border-stone-200 outline-none focus:border-amber-500 text-sm"
+                  />
+                </div>
+
+                {/* Aviso */}
+                <div className="text-[11px] bg-amber-100 text-amber-800 rounded-lg px-3 py-2 italic border border-amber-200">
+                  Cuando llegue la fecha, el usuario quedará desactivado automáticamente. Podés extender la expiración volviendo aquí.
+                </div>
+              </div>
+            )}
+          </div>
         </div>
+        )}
+
+        {/* Body — Pestaña PERMISOS ESPECÍFICOS */}
+        {activeTab === "permisos" && (
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {/* Encabezado explicativo */}
+          <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 flex items-start gap-2.5">
+            <ShieldCheck size={15} className="text-orange-700 flex-shrink-0 mt-0.5" />
+            <div className="text-xs text-orange-900 leading-relaxed">
+              <span className="font-semibold">Permisos personalizados para este usuario.</span>{" "}
+              La base son los permisos del rol <span className="font-semibold">{selectedRole?.label || "—"}</span>.
+              Aquí puedes ajustar campos puntuales sin cambiar el rol completo. Los campos
+              modificados quedan marcados como <span className="font-semibold">Personalizado</span>.
+            </div>
+          </div>
+
+          {isSuperRole ? (
+            // El super usuario tiene acceso total e inmutable: no se personaliza.
+            <div className="bg-stone-50 border border-stone-200 rounded-xl p-4 text-center">
+              <Lock size={18} className="text-stone-400 mx-auto mb-1.5" />
+              <div className="text-sm font-semibold text-stone-700">Acceso total</div>
+              <div className="text-xs text-stone-500 mt-0.5">
+                El rol Super usuario tiene todos los permisos y no admite personalización.
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Barra de resumen + reset */}
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs text-stone-500">
+                  {overrideCount > 0
+                    ? <><span className="font-semibold text-orange-700">{overrideCount}</span> campo{overrideCount !== 1 ? "s" : ""} personalizado{overrideCount !== 1 ? "s" : ""}</>
+                    : "Sin personalizaciones — usa los permisos del rol tal cual."}
+                </div>
+                {overrideCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={resetAllOverrides}
+                    className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-white border border-stone-200 hover:border-red-300 hover:text-red-600 text-stone-600 transition flex items-center gap-1"
+                  >
+                    <RotateCcw size={11} /> Restablecer todo
+                  </button>
+                )}
+              </div>
+
+              {/* Lista completa de permisos por CRM */}
+              {Object.entries(CRM_FIELD_SCHEMA).map(([crmId, crm]) => (
+                <div key={crmId} className="border border-stone-200 rounded-xl overflow-hidden">
+                  <div className="px-3 py-2 bg-stone-100 border-b border-stone-200">
+                    <div className="text-xs font-bold text-stone-700 tracking-wide uppercase">
+                      {crm.label}
+                    </div>
+                  </div>
+                  <div className="divide-y divide-stone-100">
+                    {Object.entries(crm.sections).map(([sectionId, section]) => (
+                      <div key={sectionId} className="p-3">
+                        <div className="text-[11px] font-bold text-stone-500 uppercase tracking-wider mb-2">
+                          {section.label}
+                        </div>
+                        <div className="space-y-1.5">
+                          {section.fields.map(field => {
+                            const roleLevel = roleLevelFor(crmId, sectionId, field.id);
+                            const effLevel = effectiveLevelFor(crmId, sectionId, field.id);
+                            const isCustomized = effLevel !== roleLevel;
+                            // Niveles disponibles: si el campo no es "editable",
+                            // solo Oculto/Ver; si lo es, Oculto/Ver/Editar.
+                            const levels = field.editable
+                              ? ["hidden", "view", "edit"]
+                              : ["hidden", "view"];
+                            const LEVEL_META = {
+                              hidden: { label: "Oculto", on: "bg-stone-600 text-white", off: "text-stone-500 hover:bg-stone-100" },
+                              view:   { label: "Ver",    on: "bg-blue-600 text-white",  off: "text-stone-500 hover:bg-stone-100" },
+                              edit:   { label: "Editar", on: "bg-emerald-600 text-white", off: "text-stone-500 hover:bg-stone-100" },
+                            };
+                            return (
+                              <div key={field.id} className="flex items-center gap-2">
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-sm text-stone-700 truncate flex items-center gap-1.5">
+                                    {field.label}
+                                    {isCustomized && (
+                                      <span className="text-[9px] font-bold px-1.5 py-px rounded bg-orange-100 text-orange-700 flex-shrink-0">
+                                        Personalizado
+                                      </span>
+                                    )}
+                                  </div>
+                                  {isCustomized && (
+                                    <div className="text-[10px] text-stone-400">
+                                      Rol: {LEVEL_META[roleLevel]?.label || roleLevel}
+                                    </div>
+                                  )}
+                                </div>
+                                {/* Selector de nivel */}
+                                <div className="flex gap-0.5 bg-stone-100 rounded-lg p-0.5 flex-shrink-0">
+                                  {levels.map(lvl => {
+                                    const active = effLevel === lvl;
+                                    const meta = LEVEL_META[lvl];
+                                    return (
+                                      <button
+                                        key={lvl}
+                                        type="button"
+                                        onClick={() => setFieldLevel(crmId, sectionId, field.id, lvl)}
+                                        className={`text-[11px] font-semibold px-2 py-1 rounded-md transition ${
+                                          active ? meta.on : meta.off
+                                        }`}
+                                      >
+                                        {meta.label}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+        )}
 
         {/* Footer */}
         <div className="p-3 border-t border-stone-200 bg-stone-50 flex gap-2 flex-shrink-0">
@@ -10874,15 +13430,18 @@ function UserFormModal({ user = null, allRoles = [], onCancel, onConfirm }) {
 // Permite al admin crear roles adicionales a los 4 core. Útil sobre todo para multi-sede:
 // "Veterinario Sede Norte", "Vendedor Sede Sur", etc. Cada rol custom se basa en uno
 // existente (vet/grooming/sales) y opcionalmente queda asignado a sedes específicas.
-function CreateRoleModal({ modules = [], customRoles = [], onCancel, onConfirm }) {
+function CreateRoleModal({ modules = [], customRoles = [], sedes = [], onCancel, onConfirm }) {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
-  const [inheritFrom, setInheritFrom] = useState("vet");
+  // Permisos base: ahora es multi-selección. El rol puede heredar de varios roles
+  // base a la vez (ej. Veterinario + Groomer = un rol que atiende clínica Y grooming).
+  // Los permisos resultantes son la UNIÓN de todos los roles seleccionados.
+  const [inheritFromList, setInheritFromList] = useState(["vet"]);
   const [color, setColor] = useState("from-rose-500 to-rose-700");
   const [assignedModuleIds, setAssignedModuleIds] = useState([]);
   // Etiquetas libres — útiles para identificar visualmente el rol (ej. "Sede Norte",
   // "Turno Mañana"). NO afectan permisos ni filtros — son puramente descriptivas.
-  // Para que el filtro de facturas opere automáticamente, los assignedModuleIds
+  // Para que el filtro de recibos opere automáticamente, los assignedModuleIds
   // (sección "Filtro técnico" abajo) son los que importan.
   const [assignedTags, setAssignedTags] = useState([]);
   const [tagInput, setTagInput] = useState("");
@@ -10907,21 +13466,39 @@ function CreateRoleModal({ modules = [], customRoles = [], onCancel, onConfirm }
   // Módulos disponibles para asignar (solo no-core, por convención)
   const availableModules = (modules || []).filter(m => !m.removed);
 
-  const valid = name.trim().length >= 2;
+  const valid = name.trim().length >= 2 && inheritFromList.length > 0;
 
   const handleConfirm = () => {
     if (!valid) return;
+    const baseLabels = inheritFromList
+      .map(id => INHERIT_OPTIONS.find(o => o.id === id)?.label)
+      .filter(Boolean)
+      .join(" + ");
     const newRole = {
       id: `custom-${Date.now().toString(36)}`,
       label: name.trim(),
-      desc: desc.trim() || `Rol personalizado heredado de ${INHERIT_OPTIONS.find(o => o.id === inheritFrom)?.label}`,
+      desc: desc.trim() || `Rol personalizado heredado de ${baseLabels}`,
       color,
-      inheritFrom,
+      // inheritFrom: primer rol base (retro-compatibilidad con código que espera singular)
+      inheritFrom: inheritFromList[0],
+      // inheritFromList: lista completa de roles base — los permisos se fusionan
+      inheritFromList,
       assignedModuleIds,
       assignedTags,
       createdAt: new Date().toISOString(),
     };
     onConfirm(newRole);
+  };
+
+  const toggleInheritFrom = (roleId) => {
+    setInheritFromList(prev => {
+      if (prev.includes(roleId)) {
+        // No permitir dejar la lista vacía — siempre al menos uno
+        if (prev.length === 1) return prev;
+        return prev.filter(id => id !== roleId);
+      }
+      return [...prev, roleId];
+    });
   };
 
   const toggleModule = (moduleId) => {
@@ -11031,6 +13608,13 @@ function CreateRoleModal({ modules = [], customRoles = [], onCancel, onConfirm }
             <h3 className="font-serif text-xl font-semibold mt-0.5 truncate">
               {name || "Sin nombre"}
             </h3>
+            {/* Sede(s) del rol — se actualiza en vivo según el filtro técnico */}
+            <div className="flex items-center gap-1.5 mt-1">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/20 backdrop-blur text-[11px] font-semibold">
+                <MapPin size={10} strokeWidth={2.4} />
+                {getRoleSedes({ assignedModuleIds }, modules, sedes).label}
+              </span>
+            </div>
           </div>
           <button onClick={onCancel} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 grid place-items-center transition flex-shrink-0">
             <X size={14} />
@@ -11090,38 +13674,50 @@ function CreateRoleModal({ modules = [], customRoles = [], onCancel, onConfirm }
             </div>
           </div>
 
-          {/* Heredar permisos */}
+          {/* Heredar permisos — MULTI-SELECCIÓN.
+              El rol puede combinar varios roles base. Los permisos resultantes son
+              la unión (ej. Veterinario + Groomer = acceso a clínica Y grooming). */}
           <div>
             <label className="text-xs tracking-widest uppercase text-stone-500 font-semibold block mb-2">
               Heredar permisos base de
+              <span className="text-[10px] font-normal lowercase tracking-normal text-stone-400 italic ml-1.5">
+                puedes combinar varios
+              </span>
             </label>
             <div className="space-y-1.5">
-              {INHERIT_OPTIONS.map(opt => (
-                <button
-                  key={opt.id}
-                  onClick={() => setInheritFrom(opt.id)}
-                  className={`w-full flex items-start gap-3 p-3 rounded-xl border-2 text-left transition ${
-                    inheritFrom === opt.id
-                      ? "border-orange-300 bg-orange-50"
-                      : "border-stone-200 bg-white hover:border-stone-300"
-                  }`}
-                >
-                  <div className={`w-5 h-5 rounded-full mt-0.5 flex-shrink-0 grid place-items-center ${
-                    inheritFrom === opt.id ? "bg-orange-600" : "bg-stone-200"
-                  }`}>
-                    {inheritFrom === opt.id && <Check size={11} className="text-white" strokeWidth={3} />}
-                  </div>
-                  <div>
-                    <div className={`text-sm font-semibold ${inheritFrom === opt.id ? "text-orange-900" : "text-stone-700"}`}>
-                      {opt.label}
+              {INHERIT_OPTIONS.map(opt => {
+                const checked = inheritFromList.includes(opt.id);
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => toggleInheritFrom(opt.id)}
+                    className={`w-full flex items-start gap-3 p-3 rounded-xl border-2 text-left transition ${
+                      checked
+                        ? "border-orange-300 bg-orange-50"
+                        : "border-stone-200 bg-white hover:border-stone-300"
+                    }`}
+                  >
+                    {/* Checkbox cuadrado (era círculo/radio antes) para indicar multi-selección */}
+                    <div className={`w-5 h-5 rounded-md mt-0.5 flex-shrink-0 grid place-items-center ${
+                      checked ? "bg-orange-600" : "border-2 border-stone-300"
+                    }`}>
+                      {checked && <Check size={11} className="text-white" strokeWidth={3} />}
                     </div>
-                    <div className="text-xs text-stone-500 mt-0.5">{opt.desc}</div>
-                  </div>
-                </button>
-              ))}
+                    <div>
+                      <div className={`text-sm font-semibold ${checked ? "text-orange-900" : "text-stone-700"}`}>
+                        {opt.label}
+                      </div>
+                      <div className="text-xs text-stone-500 mt-0.5">{opt.desc}</div>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
             <div className="text-xs text-stone-500 mt-1.5 italic">
-              Los permisos del rol base se copian al crear. Después puedes ajustarlos en la matriz.
+              {inheritFromList.length > 1
+                ? `Permisos combinados de ${inheritFromList.length} roles base. Después puedes ajustarlos en la matriz.`
+                : "Los permisos del rol base se copian al crear. Después puedes ajustarlos en la matriz."}
             </div>
           </div>
 
@@ -11214,7 +13810,7 @@ function CreateRoleModal({ modules = [], customRoles = [], onCancel, onConfirm }
           </div>
 
           {/* === Filtro técnico (módulos) === */}
-          {/* Sección secundaria, colapsada por defecto. Para que el filtro de facturas
+          {/* Sección secundaria, colapsada por defecto. Para que el filtro de recibos
               en SalesView se aplique automáticamente, hay que asignar los módulos
               técnicos. Las etiquetas de arriba son solo visuales. */}
           {availableModules.length > 0 && (
@@ -11231,8 +13827,8 @@ function CreateRoleModal({ modules = [], customRoles = [], onCancel, onConfirm }
                   </div>
                   <div className="text-xs text-stone-500 mt-0.5">
                     {assignedModuleIds.length === 0
-                      ? "Sin restricciones — el rol verá todas las facturas según sus permisos"
-                      : `Restringido a ${assignedModuleIds.length} ${assignedModuleIds.length === 1 ? "sede" : "sedes"}`}
+                      ? "Sin restricciones — el rol verá todas las recibos según sus permisos"
+                      : `Restringido a ${assignedModuleIds.length} ${assignedModuleIds.length === 1 ? "CRM" : "CRMs"}`}
                   </div>
                 </div>
                 <ChevronRight
@@ -11246,41 +13842,111 @@ function CreateRoleModal({ modules = [], customRoles = [], onCancel, onConfirm }
                 <>
                   <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-2 text-xs text-amber-900 leading-relaxed">
                     <Info size={12} className="inline mr-1 -mt-0.5 text-amber-700" />
-                    <strong>Solo si necesitas restringir facturas.</strong> Si seleccionas sedes aquí, el rol solo verá <em>facturas y pestañas</em> de esas instancias en SalesView. Si lo dejas vacío, las etiquetas de arriba siguen sirviendo como descripción visual.
+                    <strong>Solo si necesitas restringir recibos.</strong> Si seleccionas CRMs aquí, el rol solo verá <em>recibos y pestañas</em> de esas instancias en SalesView. Si lo dejas vacío, las etiquetas de arriba siguen sirviendo como descripción visual.
                   </div>
-                  <div className="space-y-1.5">
-                    {availableModules.map(m => {
-                      const checked = assignedModuleIds.includes(m.id);
+                  {/* Agrupamos los CRMs por sede para que se distinga claramente
+                      "Clínica Veterinaria de Pet 1" vs "Clínica Veterinaria de Pet 2".
+                      Antes la lista mostraba nombres repetidos sin contexto de sede. */}
+                  <div className="space-y-3">
+                    {(() => {
+                      // Construir mapa sedeId → módulos de esa sede
+                      const groups = {};
+                      const noSede = [];
+                      availableModules.forEach(m => {
+                        if (m.sedeId) {
+                          if (!groups[m.sedeId]) groups[m.sedeId] = [];
+                          groups[m.sedeId].push(m);
+                        } else {
+                          noSede.push(m);
+                        }
+                      });
+                      // Orden de sedes: las del array sedes primero, en su orden
+                      const orderedSedeIds = [
+                        ...sedes.map(s => s.id).filter(id => groups[id]),
+                        ...Object.keys(groups).filter(id => !sedes.find(s => s.id === id)),
+                      ];
+
+                      const renderModuleButton = (m) => {
+                        const checked = assignedModuleIds.includes(m.id);
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => toggleModule(m.id)}
+                            className={`w-full flex items-center gap-3 p-2.5 rounded-xl border-2 text-left transition ${
+                              checked
+                                ? "border-orange-300 bg-orange-50"
+                                : "border-stone-200 bg-white hover:border-stone-300"
+                            }`}
+                          >
+                            <div className={`w-5 h-5 rounded-md flex-shrink-0 grid place-items-center ${
+                              checked ? "bg-orange-600" : "border-2 border-stone-300"
+                            }`}>
+                              {checked && <Check size={11} className="text-white" strokeWidth={3} />}
+                            </div>
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider flex-shrink-0 ${
+                              m.kind === "vet" ? "bg-orange-100 text-orange-700" :
+                              m.kind === "grooming" ? "bg-emerald-100 text-emerald-700" :
+                              m.kind === "standard" ? "bg-blue-100 text-blue-700" :
+                              "bg-stone-100 text-stone-700"
+                            }`}>
+                              {m.kind}
+                            </span>
+                            <span className={`text-sm font-semibold flex-1 truncate ${checked ? "text-orange-900" : "text-stone-700"}`}>
+                              {m.name}
+                            </span>
+                          </button>
+                        );
+                      };
+
                       return (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => toggleModule(m.id)}
-                          className={`w-full flex items-center gap-3 p-2.5 rounded-xl border-2 text-left transition ${
-                            checked
-                              ? "border-orange-300 bg-orange-50"
-                              : "border-stone-200 bg-white hover:border-stone-300"
-                          }`}
-                        >
-                          <div className={`w-5 h-5 rounded-md flex-shrink-0 grid place-items-center ${
-                            checked ? "bg-orange-600" : "border-2 border-stone-300"
-                          }`}>
-                            {checked && <Check size={11} className="text-white" strokeWidth={3} />}
-                          </div>
-                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider flex-shrink-0 ${
-                            m.kind === "vet" ? "bg-orange-100 text-orange-700" :
-                            m.kind === "grooming" ? "bg-emerald-100 text-emerald-700" :
-                            m.kind === "standard" ? "bg-blue-100 text-blue-700" :
-                            "bg-stone-100 text-stone-700"
-                          }`}>
-                            {m.kind}
-                          </span>
-                          <span className={`text-sm font-semibold flex-1 truncate ${checked ? "text-orange-900" : "text-stone-700"}`}>
-                            {m.name}
-                          </span>
-                        </button>
+                        <>
+                          {orderedSedeIds.map(sedeId => {
+                            const sede = sedes.find(s => s.id === sedeId);
+                            const mods = groups[sedeId];
+                            // Cuántos de esta sede están seleccionados
+                            const selectedInSede = mods.filter(m => assignedModuleIds.includes(m.id)).length;
+                            return (
+                              <div key={sedeId}>
+                                {/* Encabezado de sede */}
+                                <div className="flex items-center gap-2 mb-1.5 px-1">
+                                  <MapPin size={12} className="text-orange-600 flex-shrink-0" />
+                                  <span className="text-xs font-bold text-stone-700 tracking-wide">
+                                    {sede?.name || "Sede desconocida"}
+                                  </span>
+                                  {sede?.isDefault && (
+                                    <span className="text-[9px] font-bold uppercase px-1.5 py-px rounded bg-orange-100 text-orange-700">
+                                      Principal
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] text-stone-400">
+                                    {selectedInSede > 0 ? `${selectedInSede}/${mods.length} seleccionados` : `${mods.length} CRMs`}
+                                  </span>
+                                </div>
+                                {/* CRMs de esa sede */}
+                                <div className="space-y-1.5 pl-2 border-l-2 border-stone-100">
+                                  {mods.map(renderModuleButton)}
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {/* CRMs sin sede asignada (legacy / casos raros) */}
+                          {noSede.length > 0 && (
+                            <div>
+                              <div className="flex items-center gap-2 mb-1.5 px-1">
+                                <AlertCircle size={12} className="text-stone-400 flex-shrink-0" />
+                                <span className="text-xs font-bold text-stone-500 tracking-wide">
+                                  Sin sede asignada
+                                </span>
+                              </div>
+                              <div className="space-y-1.5 pl-2 border-l-2 border-stone-100">
+                                {noSede.map(renderModuleButton)}
+                              </div>
+                            </div>
+                          )}
+                        </>
                       );
-                    })}
+                    })()}
                   </div>
                 </>
               )}
@@ -11345,14 +14011,21 @@ function PermToggle({ label, description, checked, disabled, onChange }) {
 // ========== VISTA: CLIENTES (con drawer de detalle) ==========
 
 function ClientsView({
-  clients, passports, setPassports, invoices, conversations,
-  canCreate, onNewClient, onOpenPassport, onOpenSales, onMessageClient,
+  clients, passports, setPassports, setClients, invoices, conversations,
+  canCreate, onNewClient, onNewClientQuick, onOpenPassport, onOpenSales, onGoToInvoice, onMessageClient,
   onCompleteRegistration, userRole = "super", permissions = {},
   petUpdates = [], setPetUpdates, userName,
   initialTab = null, onTabConsumed,
+  user = null, sedes = [], activeSedeId = null,
+  onNewSale, // callback opcional: (clientId|null) => navega a "Nueva venta" pre-rellenando si hay cliente
 }) {
   // Tab principal de la vista: "directory" (la grilla de clientes) | "updates" (cola de propuestas)
   const [mainTab, setMainTab] = useState(initialTab || "directory");
+  // Dropdown del CTA "Nuevo cliente" — abierto/cerrado
+  const [newClientMenuOpen, setNewClientMenuOpen] = useState(false);
+  const [greenMenuOpen, setGreenMenuOpen] = useState(false);
+  // Modo de visualización del directorio: "list" (tabla, default) o "cards"
+  const [viewMode, setViewMode] = useState("list");
   // Si se navegó con un initialTab pendiente (ej. desde "passport-updates" legacy),
   // lo aplicamos una vez y notificamos al padre para que limpie el state.
   useEffect(() => {
@@ -11378,6 +14051,11 @@ function ClientsView({
   const showMessaging = showField("messaging", "chat-read");
 
   const [searchQuery, setSearchQuery] = useState("");
+  // === Búsqueda de mascota (panel acordeón a la derecha) ===
+  // petSearchOpen: si está visible el panel; petSearchQuery: el texto.
+  // Cuando hay petSearchQuery activa, el filtrado de tutores se hace por nombre/código de mascota.
+  const [petSearchOpen, setPetSearchOpen] = useState(false);
+  const [petSearchQuery, setPetSearchQuery] = useState("");
   const [segmentFilter, setSegmentFilter] = useState("all");
   const [drawerClientId, setDrawerClientId] = useState(null);
   const [activeSubTab, setActiveSubTab] = useState("all"); // all | debtors
@@ -11388,11 +14066,33 @@ function ClientsView({
 
   const drawerClient = clients.find(c => c.id === drawerClientId);
 
+  // === Lista base de clientes visibles según rol/sede ===
+  // Esto se aplica como "techo" — el directorio nunca puede mostrar más que esto.
+  // Las pestañas de segmento, contadores y búsquedas operan SOBRE esta lista,
+  // no sobre la global `clients`, para que un vet de Pet 2 nunca vea "14 clientes"
+  // si solo tiene acceso a 6.
+  const clientsVisible = useMemo(() => {
+    let r = clients;
+    if (userRole !== "super" && user?.sedeIds && user.sedeIds.length > 0) {
+      r = r.filter(c => c.sedeOrigenId && user.sedeIds.includes(c.sedeOrigenId));
+    }
+    if (activeSedeId) {
+      if (userRole === "super") {
+        r = r.filter(c => !c.sedeOrigenId || c.sedeOrigenId === activeSedeId);
+      } else {
+        r = r.filter(c => c.sedeOrigenId === activeSedeId);
+      }
+    }
+    return r;
+  }, [clients, userRole, user, activeSedeId]);
+
+  // segments se calcula sobre clientsVisible (no sobre todos los clientes)
+  // para que un usuario de Pet 2 vea sólo los segmentos de SUS clientes.
   const segments = useMemo(() => {
     const map = {};
-    clients.forEach(c => { map[c.segment] = (map[c.segment] || 0) + 1; });
+    clientsVisible.forEach(c => { map[c.segment] = (map[c.segment] || 0) + 1; });
     return Object.entries(map).map(([id, count]) => ({ id, count }));
-  }, [clients]);
+  }, [clientsVisible]);
 
   // Mapa cliente → deuda total (de invoices)
   const debtMap = useMemo(() => {
@@ -11406,7 +14106,7 @@ function ClientsView({
   }, [invoices]);
 
   const filtered = useMemo(() => {
-    let r = clients;
+    let r = clientsVisible;
     if (activeSubTab === "debtors") {
       r = r.filter(c => (debtMap[c.id] || 0) > 0);
     }
@@ -11417,15 +14117,17 @@ function ClientsView({
       // El petCode siempre es buscable (está en la sección "pets" y no es sensible).
       r = r.filter(c => {
         const matches = [];
-        if (showField("tutor", "name"))    matches.push(c.name.toLowerCase().includes(q));
-        if (showField("tutor", "cedula"))  matches.push(c.cedula.toLowerCase().includes(q));
-        if (showField("tutor", "phone"))   matches.push(c.phone.includes(q));
-        if (showField("tutor", "email"))   matches.push(c.email.toLowerCase().includes(q));
+        // Cada campo puede ser null (clientes de registro rápido no tienen todo).
+        // Usamos `|| ""` antes de toLowerCase para evitar crash.
+        if (showField("tutor", "name"))    matches.push((c.name || "").toLowerCase().includes(q));
+        if (showField("tutor", "cedula"))  matches.push((c.cedula || "").toLowerCase().includes(q));
+        if (showField("tutor", "phone"))   matches.push((c.phone || "").includes(q));
+        if (showField("tutor", "email"))   matches.push((c.email || "").toLowerCase().includes(q));
         // Búsqueda por nombre de mascota (resolviendo desde passports si está disponible)
         if (showField("pets", "list")) {
-          matches.push(c.petCodes.some(code => code.includes(q)));
+          matches.push((c.petCodes || []).some(code => (code || "").includes(q)));
           // Buscar por nombre de mascota dentro de los pasaportes asociados
-          c.petCodes.forEach(code => {
+          (c.petCodes || []).forEach(code => {
             const pet = passports.find(p => p.code === code);
             if (pet?.name && showField("pets", "name")) {
               matches.push(pet.name.toLowerCase().includes(q));
@@ -11438,20 +14140,46 @@ function ClientsView({
         return matches.some(Boolean);
       });
     }
+    // === Filtro por búsqueda de mascota (acordeón a la derecha) ===
+    // Independiente del search principal: cuando hay texto en petSearchQuery,
+    // solo se muestran tutores cuyas mascotas matcheen por nombre, código o raza.
+    if (petSearchQuery.trim() && showField("pets", "list")) {
+      const pq = petSearchQuery.toLowerCase().trim();
+      r = r.filter(c => {
+        return (c.petCodes || []).some(code => {
+          if ((code || "").toLowerCase().includes(pq)) return true;
+          const pet = passports.find(p => p.code === code);
+          if (!pet) return false;
+          if (pet.name && pet.name.toLowerCase().includes(pq)) return true;
+          if (pet.breed && pet.breed.toLowerCase().includes(pq)) return true;
+          if (pet.species && pet.species.toLowerCase().includes(pq)) return true;
+          return false;
+        });
+      });
+    }
     // Si tab deudores, ordenar por monto de deuda descendente
     if (activeSubTab === "debtors") {
       r = [...r].sort((a, b) => (debtMap[b.id] || 0) - (debtMap[a.id] || 0));
     }
     return r;
-  }, [clients, segmentFilter, searchQuery, activeSubTab, debtMap]);
+  }, [clientsVisible, segmentFilter, searchQuery, petSearchQuery, activeSubTab, debtMap, passports]);
 
   const stats = useMemo(() => {
-    const totalPets = clients.reduce((sum, c) => sum + c.petCodes.length, 0);
-    const totalSpent = clients.reduce((sum, c) => sum + c.totalSpent, 0);
-    const totalDebt = Object.values(debtMap).reduce((s, v) => s + v, 0);
-    const debtorCount = Object.keys(debtMap).length;
-    return { totalClients: clients.length, totalPets, totalSpent, totalDebt, debtorCount };
-  }, [clients, debtMap]);
+    // Todo se calcula sobre clientsVisible para que un usuario de Pet 2
+    // no vea conteos globales (mascotas, deudores, etc.) de Pet 1.
+    const visibleIds = new Set(clientsVisible.map(c => c.id));
+    const totalPets = clientsVisible.reduce((sum, c) => sum + (c.petCodes?.length || 0), 0);
+    const totalSpent = clientsVisible.reduce((sum, c) => sum + (c.totalSpent || 0), 0);
+    let totalDebt = 0;
+    let debtorCount = 0;
+    Object.entries(debtMap).forEach(([cid, debt]) => {
+      if (visibleIds.has(cid)) {
+        totalDebt += debt;
+        debtorCount++;
+      }
+    });
+    return { totalClients: clientsVisible.length, totalPets, totalSpent, totalDebt, debtorCount };
+  }, [clientsVisible, debtMap]);
 
   const toggleCategory = (catId) => {
     setVisibleCategories(prev =>
@@ -11477,7 +14205,7 @@ function ClientsView({
           <span>Directorio de clientes</span>
           <span className={`text-xs font-bold px-1.5 py-px rounded-full ${
             mainTab === "directory" ? "bg-orange-700 text-white" : "bg-stone-100 text-stone-600"
-          }`}>{clients.length}</span>
+          }`}>{clientsVisible.length}</span>
         </button>
         <button
           onClick={() => setMainTab("updates")}
@@ -11512,119 +14240,274 @@ function ClientsView({
 
       {/* Tab "Directorio": el contenido original de Clientes (cards + filtros + drawer) */}
       {mainTab === "directory" && (<>
-      <div className={`space-y-5 transition-all duration-300 ${drawerClient ? "sm:pr-80" : ""}`}>
-        {/* Hero */}
-        <div className="relative p-6 rounded-2xl bg-gradient-to-br from-white via-orange-50 to-orange-100 border border-stone-200 overflow-hidden">
-          <div className="flex items-center gap-4 flex-wrap">
-            <div className="flex-1 min-w-0">
-              <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold mb-1">
-                Operación · Base de tutores
-              </div>
-              <h2 className="font-serif text-3xl font-semibold leading-tight">
-                <span className="text-orange-700">{stats.totalClients}</span> clientes registrados
-              </h2>
-              <p className="text-sm text-stone-600 mt-1 max-w-2xl">
-                Click en cualquier cliente para ver su ficha completa con historial multi-categoría.
-              </p>
-            </div>
-            <div className="flex gap-2.5 flex-wrap">
-              <Kpi label="Mascotas totales" value={stats.totalPets} />
-              {stats.totalDebt > 0 && (
-                <button
-                  onClick={() => setActiveSubTab("debtors")}
-                  className={`px-5 py-3 rounded-xl text-center min-w-20 transition border ${
-                    activeSubTab === "debtors"
-                      ? "bg-red-600 border-red-600 text-white"
-                      : "bg-white border-red-200 hover:border-red-400"
-                  }`}
-                >
-                  <div className={`text-xs tracking-widest uppercase font-semibold flex items-center gap-1 justify-center ${
-                    activeSubTab === "debtors" ? "text-white" : "text-red-700"
-                  }`}>
-                    <AlertTriangle size={11} /> Deuda
-                  </div>
-                  <div className={`font-serif text-2xl font-semibold leading-none mt-1 ${
-                    activeSubTab === "debtors" ? "text-white" : "text-red-700"
-                  }`}>
-                    ${(stats.totalDebt / 1000).toFixed(1)}k
-                  </div>
-                </button>
-              )}
-              <Kpi label="Facturación" value={`$${(stats.totalSpent / 1000).toFixed(1)}k`} accent />
-            </div>
-          </div>
-        </div>
-
-        {/* Sub-tabs: Todos | Deudores */}
-        <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-1.5 inline-flex gap-1">
-          <button
-            onClick={() => setActiveSubTab("all")}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${
-              activeSubTab === "all" ? "bg-stone-900 text-white" : "text-stone-600 hover:bg-stone-50"
-            }`}
-          >
-            <Users size={14} />
-            Todos los clientes
-            <span className={`text-xs font-bold px-1.5 py-px rounded-full ${
-              activeSubTab === "all" ? "bg-stone-700 text-white" : "bg-stone-100 text-stone-600"
-            }`}>{clients.length}</span>
-          </button>
-          {showField("billing", "balance") && (
+      <div className="space-y-5">
+        {/* Sub-tabs (Todos / Deudores) + toggles de vista + CTA Nuevo cliente.
+            Layout: las tabs van a la izquierda, los controles a la derecha.
+            En móvil el bloque se apila (flex-wrap) y los controles bajan a la
+            siguiente línea pero también respetando el alineamiento derecho. */}
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Pill de sub-tabs */}
+          <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-1.5 inline-flex gap-1">
             <button
-              onClick={() => setActiveSubTab("debtors")}
+              onClick={() => setActiveSubTab("all")}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${
-                activeSubTab === "debtors" ? "bg-red-600 text-white" : "text-stone-600 hover:bg-stone-50"
+                activeSubTab === "all" ? "bg-stone-900 text-white" : "text-stone-600 hover:bg-stone-50"
               }`}
             >
-              <AlertTriangle size={14} />
-              Deudores
+              <Users size={14} />
+              Todos los clientes
               <span className={`text-xs font-bold px-1.5 py-px rounded-full ${
-                activeSubTab === "debtors" ? "bg-red-700 text-white" : "bg-red-100 text-red-700"
-              }`}>{stats.debtorCount}</span>
+                activeSubTab === "all" ? "bg-stone-700 text-white" : "bg-stone-100 text-stone-600"
+              }`}>{clientsVisible.length}</span>
             </button>
-          )}
-          {activeSubTab === "debtors" && (
-            <button
-              onClick={onOpenSales}
-              className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-stone-600 hover:text-orange-700 hover:bg-orange-50 transition"
-            >
-              <ExternalLink size={12} />
-              Ir a Ventas
-            </button>
+            {showField("billing", "balance") && (
+              <button
+                onClick={() => setActiveSubTab("debtors")}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${
+                  activeSubTab === "debtors" ? "bg-red-600 text-white" : "text-stone-600 hover:bg-stone-50"
+                }`}
+              >
+                <AlertTriangle size={14} />
+                Deudores
+                <span className={`text-xs font-bold px-1.5 py-px rounded-full ${
+                  activeSubTab === "debtors" ? "bg-red-700 text-white" : "bg-red-100 text-red-700"
+                }`}>{stats.debtorCount}</span>
+              </button>
+            )}
+            {/* Sub-tab "Pasaportes": reutiliza la vista de pasaportes pero embebida
+                aquí, mostrando solo las tarjetas de las mascotas (sin el header
+                propio de la página). Solo se muestra si el rol puede ver la lista
+                de mascotas. */}
+            {showField("pets", "list") && (
+              <button
+                onClick={() => { setActiveSubTab("passports"); setDrawerClientId(null); }}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition ${
+                  activeSubTab === "passports" ? "bg-emerald-600 text-white" : "text-stone-600 hover:bg-stone-50"
+                }`}
+              >
+                <PawPrint size={14} />
+                Pasaportes
+                <span className={`text-xs font-bold px-1.5 py-px rounded-full ${
+                  activeSubTab === "passports" ? "bg-emerald-700 text-white" : "bg-emerald-100 text-emerald-700"
+                }`}>{passports.length}</span>
+              </button>
+            )}
+            {activeSubTab === "debtors" && (
+              <button
+                onClick={onOpenSales}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-stone-600 hover:text-orange-700 hover:bg-orange-50 transition"
+              >
+                <ExternalLink size={12} />
+                Ir a Ventas
+              </button>
+            )}
+          </div>
+
+          {/* Controles a la derecha (alineados al margen): toggle de vista + Nuevo cliente.
+              ml-auto empuja todo el grupo hacia el borde derecho.
+              En el sub-tab "Pasaportes" se ocultan: esa vista trae su propia toolbar. */}
+          {activeSubTab !== "passports" && (
+          <div className="ml-auto flex items-center gap-2">
+            {/* Toggle de vista: tarjetas (default) o lista (tabla compacta) */}
+            <div className="bg-white border border-stone-200 rounded-xl shadow-sm p-1 inline-flex gap-0.5">
+              <button
+                onClick={() => setViewMode("cards")}
+                title="Vista de tarjeta"
+                className={`p-2 rounded-lg transition ${
+                  viewMode === "cards" ? "bg-stone-900 text-white" : "text-stone-600 hover:bg-stone-50"
+                }`}
+              >
+                <LayoutGrid size={15} strokeWidth={1.8} />
+              </button>
+              <button
+                onClick={() => setViewMode("list")}
+                title="Vista de lista"
+                className={`p-2 rounded-lg transition ${
+                  viewMode === "list" ? "bg-stone-900 text-white" : "text-stone-600 hover:bg-stone-50"
+                }`}
+              >
+                <Menu size={15} strokeWidth={1.8} />
+              </button>
+            </div>
+
+            {/* CTA Verde — dropdown con 2 opciones: registro rápido o ficha completa */}
+            {onNewSale && (
+              <div className="relative">
+                <button
+                  onClick={() => setGreenMenuOpen(v => !v)}
+                  title="Nueva venta / recibo"
+                  className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition"
+                >
+                  <Receipt size={14} />
+                  <Plus size={13} strokeWidth={2.5} />
+                </button>
+                {greenMenuOpen && (
+                  <>
+                    <div onClick={() => setGreenMenuOpen(false)} className="fixed inset-0 z-30"></div>
+                    <div className="absolute right-0 mt-1 w-72 bg-white border border-stone-200 rounded-xl shadow-2xl z-40 overflow-hidden">
+                      <button
+                        onClick={() => { setGreenMenuOpen(false); onNewSale(null); }}
+                        className="w-full flex items-start gap-3 p-3 hover:bg-emerald-50 transition text-left border-b border-stone-100"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 grid place-items-center flex-shrink-0">
+                          <Zap size={14} strokeWidth={2} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-sm text-stone-900">Registro rápido</div>
+                          <div className="text-xs text-stone-500 mt-0.5 leading-snug">Solo cédula, teléfono y dirección. 30 segundos.</div>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => { setGreenMenuOpen(false); onNewClient && onNewClient(); }}
+                        className="w-full flex items-start gap-3 p-3 hover:bg-orange-50 transition text-left"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-orange-100 text-orange-700 grid place-items-center flex-shrink-0">
+                          <Stethoscope size={14} strokeWidth={2} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-sm text-stone-900">Ficha clínica completa</div>
+                          <div className="text-xs text-stone-500 mt-0.5 leading-snug">Cliente + mascota + historia clínica inicial.</div>
+                        </div>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* CTA Nuevo cliente — dropdown con 2 opciones (rápido / ficha completa).
+                Reemplaza al CTA que vivía en el Sidebar. */}
+            {canCreate && (
+              <div className="relative">
+                <button
+                  onClick={() => {
+                    if (!onNewClientQuick) { onNewClient && onNewClient(); return; }
+                    setNewClientMenuOpen(v => !v);
+                  }}
+                  className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold transition"
+                >
+                  <UserPlus size={14} /> Nuevo cliente
+                  {onNewClientQuick && <ChevronDown size={13} className={`transition-transform ${newClientMenuOpen ? "rotate-180" : ""}`} />}
+                </button>
+                {newClientMenuOpen && onNewClientQuick && (
+                  <>
+                    <div onClick={() => setNewClientMenuOpen(false)} className="fixed inset-0 z-30"></div>
+                    <div className="absolute right-0 mt-1 w-72 bg-white border border-stone-200 rounded-xl shadow-2xl z-40 overflow-hidden">
+                      <button
+                        onClick={() => { setNewClientMenuOpen(false); onNewClientQuick(); }}
+                        className="w-full flex items-start gap-3 p-3 hover:bg-orange-50 transition text-left border-b border-stone-100"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 grid place-items-center flex-shrink-0">
+                          <Zap size={14} strokeWidth={2} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-sm text-stone-900">Registro rápido</div>
+                          <div className="text-xs text-stone-500 mt-0.5 leading-snug">Solo cédula, teléfono y dirección. 30 segundos.</div>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => { setNewClientMenuOpen(false); onNewClient && onNewClient(); }}
+                        className="w-full flex items-start gap-3 p-3 hover:bg-orange-50 transition text-left"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-orange-100 text-orange-700 grid place-items-center flex-shrink-0">
+                          <Stethoscope size={14} strokeWidth={2} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-sm text-stone-900">Ficha clínica completa</div>
+                          <div className="text-xs text-stone-500 mt-0.5 leading-snug">Cliente + mascota + historia clínica inicial.</div>
+                        </div>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
           )}
         </div>
 
+        {/* Toolbar + grilla: solo en los sub-tabs "Todos" y "Deudores".
+            En "Pasaportes" se renderiza PassportView (más abajo). */}
+        {activeSubTab !== "passports" && (<>
         {/* Toolbar */}
         <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-4 flex flex-col lg:flex-row gap-3 items-stretch lg:items-center">
-          <div className="relative flex-1">
-            <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-stone-400" />
-            <input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={(() => {
-                // Construir placeholder reflejando solo los campos buscables
-                const parts = [];
-                if (showField("tutor", "name"))    parts.push("nombre");
-                if (showField("pets", "name"))     parts.push("mascota");
-                if (showField("tutor", "cedula"))  parts.push("cédula");
-                if (showField("tutor", "phone"))   parts.push("teléfono");
-                if (showField("tutor", "email"))   parts.push("email");
-                if (showField("pets", "list"))     parts.push("código de mascota");
-                if (parts.length === 0) return "Buscar...";
-                if (parts.length === 1) return `Buscar por ${parts[0]}...`;
-                const last = parts.pop();
-                return `Buscar por ${parts.join(", ")} o ${last}...`;
-              })()}
-              className="w-full pl-11 pr-10 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-orange-500 focus:bg-white"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600"
-              >
-                <X size={14} />
-              </button>
-            )}
+          {/* === Fila de búsqueda (acordeón) ===
+              El input principal se contrae cuando se abre la búsqueda de mascota,
+              dando espacio al panel sin saltar el layout. Usamos width transitions. */}
+          <div className="flex-1 flex items-stretch gap-2 min-w-0">
+            {/* Input principal: tutor / cliente */}
+            <div className={`relative transition-all duration-300 ease-out ${
+              petSearchOpen ? "w-1/2" : "flex-1"
+            } min-w-0`}>
+              <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-stone-400" />
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={(() => {
+                  const parts = [];
+                  if (showField("tutor", "name"))    parts.push("nombre");
+                  if (showField("tutor", "cedula"))  parts.push("cédula");
+                  if (showField("tutor", "phone"))   parts.push("teléfono");
+                  if (showField("tutor", "email"))   parts.push("email");
+                  if (parts.length === 0) return "Buscar tutor...";
+                  if (parts.length === 1) return `Buscar por ${parts[0]}...`;
+                  const last = parts.pop();
+                  return `Buscar por ${parts.join(", ")} o ${last}...`;
+                })()}
+                className="w-full pl-11 pr-10 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-orange-500 focus:bg-white transition"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
+
+            {/* Botón patita: toggle del panel de búsqueda por mascota.
+                Cuando está activo, el panel se "expande" a la derecha del input principal,
+                que se contrae al 50% — efecto acordeón. */}
+            <button
+              onClick={() => {
+                setPetSearchOpen(v => !v);
+                if (petSearchOpen) setPetSearchQuery(""); // al cerrar, limpiar
+              }}
+              title={petSearchOpen ? "Cerrar búsqueda por mascota" : "Buscar por mascota"}
+              className={`flex-shrink-0 px-3 rounded-xl border transition flex items-center justify-center gap-1.5 ${
+                petSearchOpen
+                  ? "bg-orange-600 border-orange-600 text-white shadow"
+                  : "bg-stone-50 border-stone-200 text-stone-600 hover:border-orange-300 hover:bg-white"
+              }`}
+            >
+              <PawPrint size={16} strokeWidth={petSearchOpen ? 2.4 : 1.8} />
+              {petSearchOpen && <span className="hidden sm:inline text-xs font-semibold">Por mascota</span>}
+            </button>
+
+            {/* Panel acordeón: input de búsqueda por mascota.
+                Se desliza desde la derecha con max-w transition. */}
+            <div className={`relative transition-all duration-300 ease-out overflow-hidden ${
+              petSearchOpen ? "w-1/2 opacity-100" : "w-0 opacity-0"
+            } min-w-0`}>
+              <PawPrint size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-orange-500" />
+              <input
+                value={petSearchQuery}
+                onChange={(e) => setPetSearchQuery(e.target.value)}
+                placeholder="Nombre, código o raza..."
+                disabled={!petSearchOpen}
+                autoFocus={petSearchOpen}
+                className="w-full pl-10 pr-9 py-2.5 bg-orange-50 border border-orange-200 rounded-xl text-sm outline-none focus:border-orange-500 focus:bg-white transition"
+              />
+              {petSearchQuery && (
+                <button
+                  onClick={() => setPetSearchQuery("")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="flex gap-1.5 flex-wrap">
@@ -11637,7 +14520,7 @@ function ClientsView({
               Todos
               <span className={`text-xs font-bold px-1.5 py-px rounded-full ${
                 segmentFilter === "all" ? "bg-stone-700 text-white" : "bg-stone-100 text-stone-500"
-              }`}>{clients.length}</span>
+              }`}>{clientsVisible.length}</span>
             </button>
             {segments.map(s => (
               <button
@@ -11654,45 +14537,131 @@ function ClientsView({
               </button>
             ))}
           </div>
-
-          {canCreate && (
-            <button
-              onClick={onNewClient}
-              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold transition"
-            >
-              <UserPlus size={14} /> Nuevo cliente
-            </button>
-          )}
         </div>
 
-        {/* Grid de clientes */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {filtered.length === 0 && (
-            <div className="col-span-full bg-white border border-stone-200 rounded-2xl p-12 text-center">
-              <Search size={32} className="text-stone-300 mx-auto mb-3" />
-              <div className="text-base font-semibold text-stone-700">Sin resultados</div>
-              <div className="text-sm text-stone-500 mt-1">
-                Intenta otros términos de búsqueda.
-              </div>
+        {/* Render condicional: vista de tarjetas o vista de lista (tabla) */}
+        {filtered.length === 0 ? (
+          <div className="bg-white border border-stone-200 rounded-2xl p-12 text-center">
+            <Search size={32} className="text-stone-300 mx-auto mb-3" />
+            <div className="text-base font-semibold text-stone-700">Sin resultados</div>
+            <div className="text-sm text-stone-500 mt-1">
+              Intenta otros términos de búsqueda.
             </div>
-          )}
-          {filtered.map(c => (
-            <ClientCard
-              key={c.id}
-              client={c}
-              active={drawerClientId === c.id}
-              onOpen={() => setDrawerClientId(c.id)}
-              debt={debtMap[c.id] || 0}
-              viewPerms={{
-                showName: showField("tutor", "name"),
-                showCedula: showField("tutor", "cedula"),
-                showSegment: showField("tutor", "segment"),
-                showBalance: showField("billing", "balance"),
-                showPets: showField("pets", "list"),
-              }}
-            />
-          ))}
-        </div>
+          </div>
+        ) : viewMode === "cards" ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {filtered.map(c => (
+              <ClientCard
+                key={c.id}
+                client={c}
+                active={drawerClientId === c.id}
+                onOpen={() => setDrawerClientId(c.id)}
+                debt={debtMap[c.id] || 0}
+                viewPerms={{
+                  showName: showField("tutor", "name"),
+                  showCedula: showField("tutor", "cedula"),
+                  showSegment: showField("tutor", "segment"),
+                  showBalance: showField("billing", "balance"),
+                  showPets: showField("pets", "list"),
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          /* === Vista de lista (tabla compacta) ===
+             Cada fila muestra los mismos datos que la card pero en formato denso.
+             Permite escanear muchos clientes en menos espacio vertical. */
+          <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-stone-50 border-b border-stone-200">
+                  <tr className="text-left">
+                    {showField("tutor", "name")    && <th className="px-4 py-2.5 text-xs tracking-widest uppercase text-stone-500 font-semibold">Tutor</th>}
+                    {showField("tutor", "cedula")  && <th className="px-4 py-2.5 text-xs tracking-widest uppercase text-stone-500 font-semibold">Cédula</th>}
+                    {showField("pets", "list")     && <th className="px-4 py-2.5 text-xs tracking-widest uppercase text-stone-500 font-semibold">Mascotas</th>}
+                    {showField("billing", "balance") && <th className="px-4 py-2.5 text-xs tracking-widest uppercase text-stone-500 font-semibold text-right">Saldo</th>}
+                    {showField("tutor", "segment") && <th className="px-4 py-2.5 text-xs tracking-widest uppercase text-stone-500 font-semibold">Segmento</th>}
+                    <th className="w-10"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-100">
+                  {filtered.map(c => {
+                    const debt = debtMap[c.id] || 0;
+                    const isActive = drawerClientId === c.id;
+                    const initials = (c.name || "?").split(" ").slice(0, 2).map(s => s[0]).join("").toUpperCase();
+                    return (
+                      <tr
+                        key={c.id}
+                        onClick={() => setDrawerClientId(c.id)}
+                        className={`cursor-pointer transition ${
+                          isActive ? "bg-orange-50" : "hover:bg-stone-50"
+                        }`}
+                      >
+                        {showField("tutor", "name") && (
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-orange-500 to-orange-700 text-white grid place-items-center text-xs font-bold flex-shrink-0">
+                                {initials}
+                              </div>
+                              <span className="font-semibold text-stone-800 truncate">{c.name || "—"}</span>
+                            </div>
+                          </td>
+                        )}
+                        {showField("tutor", "cedula") && (
+                          <td className="px-4 py-2.5 text-stone-600 font-mono text-xs">{c.cedula || "—"}</td>
+                        )}
+                        {showField("pets", "list") && (
+                          <td className="px-4 py-2.5 text-stone-600">
+                            <span className="inline-flex items-center gap-1">
+                              <PawPrint size={12} />
+                              {(c.petCodes || []).length}
+                            </span>
+                          </td>
+                        )}
+                        {showField("billing", "balance") && (
+                          <td className="px-4 py-2.5 text-right">
+                            {debt > 0 ? (
+                              <span className="font-mono font-bold text-red-700">${debt.toLocaleString()}</span>
+                            ) : (
+                              <span className="text-stone-400 text-xs">Al día</span>
+                            )}
+                          </td>
+                        )}
+                        {showField("tutor", "segment") && (
+                          <td className="px-4 py-2.5">
+                            {c.segment && (
+                              <span className="text-xs text-stone-600">{c.segment}</span>
+                            )}
+                          </td>
+                        )}
+                        <td className="px-2 py-2.5 text-stone-400">
+                          <ChevronRight size={14} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        </>)}
+
+        {/* Sub-tab "Pasaportes": vista de pasaportes embebida.
+            Reutiliza PassportView (la misma de la página de Pasaportes) pero con
+            embedded={true} para que oculte su header propio y se integre como una
+            sección más del directorio de clientes. */}
+        {activeSubTab === "passports" && (
+          <PassportView
+            passports={passports}
+            setPassports={setPassports}
+            clients={clients}
+            setClients={setClients}
+            canCreate={canCreate}
+            onMessageClient={onMessageClient}
+            embedded
+          />
+        )}
       </div>
 
       {/* DRAWER lateral derecho — solo visible en el tab directorio */}
@@ -11700,6 +14669,7 @@ function ClientsView({
         <ClientDrawer
           client={drawerClient}
           passports={passports}
+          invoices={invoices}
           visibleCategories={visibleCategories}
           onToggleCategory={toggleCategory}
           onClose={() => setDrawerClientId(null)}
@@ -11709,6 +14679,8 @@ function ClientsView({
           onCompleteRegistration={onCompleteRegistration}
           userRole={userRole}
           permissions={permissions}
+          onNewSale={onNewSale}
+          onGoToInvoice={onGoToInvoice}
         />
       )}
       </>)}
@@ -11783,7 +14755,7 @@ function ClientCard({ client, active, onOpen, debt, viewPerms = {} }) {
 
 // ========== DRAWER LATERAL DERECHO ==========
 
-function ClientDrawer({ client, passports, visibleCategories, onToggleCategory, onClose, onOpenPassport, conversation, onMessageClient, onCompleteRegistration, userRole = "super", permissions = {} }) {
+function ClientDrawer({ client, passports, invoices = [], visibleCategories, onToggleCategory, onClose, onOpenPassport, conversation, onMessageClient, onCompleteRegistration, userRole = "super", permissions = {}, onNewSale, onGoToInvoice }) {
   // Helpers de permisos para el CRM "clients"
   const showField = (sectionId, fieldId) =>
     getFieldLevel(permissions, userRole, "clients", sectionId, fieldId) !== "hidden";
@@ -11794,9 +14766,11 @@ function ClientDrawer({ client, passports, visibleCategories, onToggleCategory, 
   const [activeTab, setActiveTab] = useState("overview"); // overview | history | pets
   const [expandedPet, setExpandedPet] = useState(null);
   const [showCustomize, setShowCustomize] = useState(false);
+  const [showFullHistory, setShowFullHistory] = useState(false);
+  const [showSaleMenu, setShowSaleMenu] = useState(false);
 
   const initials = client.name.split(" ").slice(0, 2).map(s => s[0]).join("").toUpperCase();
-  const events = useMemo(() => buildClientHistory(client), [client]);
+  const events = useMemo(() => buildClientHistory(client, invoices), [client, invoices]);
   const visibleEvents = events.filter(e => visibleCategories.includes(e.category));
   const allPets = useMemo(
     () => client.petCodes.map(code => findPetByCode(code, passports)).filter(Boolean),
@@ -11812,14 +14786,31 @@ function ClientDrawer({ client, passports, visibleCategories, onToggleCategory, 
 
   return (
     <>
-      {/* Backdrop solo en mobile */}
+      {/* Backdrop completo (no solo mobile): cubre toda la pantalla y cierra al click */}
       <div
         onClick={onClose}
-        className="fixed inset-0 bg-stone-900 z-30 sm:hidden"
+        className="fixed inset-0 bg-stone-900/80 z-30"
       />
 
-      {/* Drawer: en desktop pegado a la derecha del módulo (absolute), en mobile ocupa pantalla */}
-      <aside className="fixed top-0 right-0 bottom-0 w-full sm:absolute sm:top-0 sm:right-0 sm:bottom-auto sm:w-80 sm:min-h-screen bg-stone-50 z-40 shadow-2xl flex flex-col border-l border-stone-200">
+      {/* Drawer lateral derecho con ancho fijo (420px desktop, casi fullscreen móvil).
+          Usamos inline style en lugar de clase Tailwind responsive para garantizar
+          que funcione en cualquier contexto (preview embebido, sandbox, producción).
+          El media query JS detecta el tamaño y ajusta. */}
+      <aside
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          position: "fixed",
+          top: 16,
+          right: 16,
+          bottom: 16,
+          // En pantallas pequeñas ocupa casi todo el ancho; en grandes 420px fijos.
+          ...(typeof window !== "undefined" && window.innerWidth >= 640
+            ? { width: 420, left: "auto" }
+            : { left: 16 }),
+          zIndex: 40,
+        }}
+        className="bg-stone-50 shadow-2xl rounded-2xl flex flex-col border border-stone-200 overflow-hidden"
+      >
         {/* Header del drawer */}
         <div className="bg-white border-b border-stone-200 flex-shrink-0">
           <div className="p-4 flex items-center gap-3">
@@ -11837,6 +14828,50 @@ function ClientDrawer({ client, passports, visibleCategories, onToggleCategory, 
                 {client.name}
               </div>
             </div>
+            {/* CTA Nueva venta — dropdown con 2 opciones */}
+            {onNewSale && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowSaleMenu(!showSaleMenu)}
+                  title="Crear recibo para este cliente"
+                  className="flex items-center gap-1 px-2.5 h-9 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition"
+                >
+                  <Receipt size={14} />
+                  <Plus size={13} strokeWidth={2.5} />
+                </button>
+                {showSaleMenu && (
+                  <>
+                    <div onClick={() => setShowSaleMenu(false)} className="fixed inset-0 z-[45]"></div>
+                    <div className="absolute right-0 top-11 w-56 bg-white border border-stone-200 rounded-xl shadow-xl z-[50] overflow-hidden">
+                      <button
+                        onClick={() => { setShowSaleMenu(false); onNewSale(client.id); }}
+                        className="w-full flex items-start gap-2.5 p-3 hover:bg-emerald-50 transition text-left border-b border-stone-100"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 grid place-items-center flex-shrink-0">
+                          <Zap size={13} />
+                        </div>
+                        <div>
+                          <div className="font-semibold text-sm text-stone-800">Recibo express</div>
+                          <div className="text-[11px] text-stone-500">Ir directo al constructor de recibo.</div>
+                        </div>
+                      </button>
+                      <button
+                        onClick={() => { setShowSaleMenu(false); onNewSale(client.id, true); }}
+                        className="w-full flex items-start gap-2.5 p-3 hover:bg-orange-50 transition text-left"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-orange-100 text-orange-700 grid place-items-center flex-shrink-0">
+                          <FileText size={13} />
+                        </div>
+                        <div>
+                          <div className="font-semibold text-sm text-stone-800">Con ficha completa</div>
+                          <div className="text-[11px] text-stone-500">Abrir formulario de registro + recibo.</div>
+                        </div>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
             <button
               onClick={() => setShowCustomize(!showCustomize)}
               className={`w-9 h-9 rounded-lg grid place-items-center transition ${
@@ -11949,6 +14984,7 @@ function ClientDrawer({ client, passports, visibleCategories, onToggleCategory, 
               initials={initials}
               segmentColors={segmentColors}
               allPets={allPets}
+              onOpenPassport={onOpenPassport}
               viewPerms={{
                 showCedula: showField("tutor", "cedula"),
                 showPhone: showField("tutor", "phone"),
@@ -11960,6 +14996,8 @@ function ClientDrawer({ client, passports, visibleCategories, onToggleCategory, 
                 showBalance: showField("billing", "balance"),
                 showPets: showField("pets", "list"),
               }}
+              onSwitchToPets={() => setActiveTab("pets")}
+              onAddPet={() => onCompleteRegistration?.(client)}
             />
           )}
 
@@ -11968,6 +15006,8 @@ function ClientDrawer({ client, passports, visibleCategories, onToggleCategory, 
               events={visibleEvents}
               totalEvents={events.length}
               hiddenCount={events.length - visibleEvents.length}
+              onViewMore={() => setShowFullHistory(true)}
+              onGoToInvoice={onGoToInvoice}
             />
           )}
 
@@ -12013,11 +15053,20 @@ function ClientDrawer({ client, passports, visibleCategories, onToggleCategory, 
           </div>
         )}
       </aside>
+
+      {/* Modal de historial completo con paginación */}
+      {showFullHistory && (
+        <FullHistoryModal
+          events={events}
+          client={client}
+          onClose={() => setShowFullHistory(false)}
+        />
+      )}
     </>
   );
 }
 
-function DrawerOverview({ client, initials, segmentColors, allPets, viewPerms = {} }) {
+function DrawerOverview({ client, initials, segmentColors, allPets, viewPerms = {}, onOpenPassport, onSwitchToPets, onAddPet }) {
   const {
     showCedula = true, showPhone = true, showEmail = true, showAddress = true,
     showSegment = true, showSpending = true, showAnyContact = true,
@@ -12077,14 +15126,24 @@ function DrawerOverview({ client, initials, segmentColors, allPets, viewPerms = 
       {/* Métricas */}
       <div className="grid grid-cols-2 gap-2">
         {showPets && <MetricCard icon={PawPrint} label="Mascotas" value={client.petCodes.length} />}
-        {showSpending && <MetricCard icon={TrendingUp} label="Facturado" value={`$${client.totalSpent.toLocaleString()}`} accent />}
+        {showSpending && <MetricCard icon={TrendingUp} label="Recibodo" value={`$${client.totalSpent.toLocaleString()}`} accent />}
       </div>
 
       {/* Quick pets list */}
       {showPets && (
         <div className="bg-white border border-stone-200 rounded-xl p-4">
-          <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold mb-2">
-            Mascotas vinculadas
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold">
+              Mascotas vinculadas
+            </div>
+            {onAddPet && (
+              <button
+                onClick={() => onAddPet()}
+                className="flex items-center gap-1 text-xs font-semibold text-orange-600 hover:text-orange-700 transition"
+              >
+                <Plus size={11} /> Agregar
+              </button>
+            )}
           </div>
           <div className="space-y-1.5">
             {allPets.slice(0, 4).map(pet => {
@@ -12095,7 +15154,20 @@ function DrawerOverview({ client, initials, segmentColors, allPets, viewPerms = 
                     <Icon size={13} strokeWidth={1.8} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-semibold truncate">{pet.name}</div>
+                    <div className="flex items-center gap-1.5">
+                      <div className="text-xs font-semibold truncate">{pet.name}</div>
+                      {/* Lupa: atajo directo al pasaporte sin tener que ir al tab Mascotas.
+                          Solo se muestra si la mascota tiene pasaporte (no para externas). */}
+                      {!pet.isExtra && onOpenPassport && (
+                        <button
+                          onClick={() => onOpenPassport(pet.code)}
+                          title="Ver pasaporte de la mascota"
+                          className="w-5 h-5 rounded-md bg-white hover:bg-orange-100 grid place-items-center text-stone-500 hover:text-orange-700 transition flex-shrink-0"
+                        >
+                          <Search size={9} strokeWidth={2} />
+                        </button>
+                      )}
+                    </div>
                     <div className="text-xs text-orange-600 font-mono">{pet.code}</div>
                   </div>
                 </div>
@@ -12113,7 +15185,7 @@ function DrawerOverview({ client, initials, segmentColors, allPets, viewPerms = 
   );
 }
 
-function DrawerHistory({ events, totalEvents, hiddenCount }) {
+function DrawerHistory({ events, totalEvents, hiddenCount, onViewMore, onGoToInvoice }) {
   const [expandedId, setExpandedId] = useState(null);
 
   const byCategory = useMemo(() => {
@@ -12168,6 +15240,7 @@ function DrawerHistory({ events, totalEvents, hiddenCount }) {
                   colors={colors}
                   expanded={expandedId === e.id}
                   onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
+                  onGoToInvoice={onGoToInvoice}
                 />
               ))}
             </div>
@@ -12184,23 +15257,202 @@ function DrawerHistory({ events, totalEvents, hiddenCount }) {
           </div>
         </div>
       )}
+
+      {/* Botón "Ver más" — abre la vista completa con paginación */}
+      {events.length > 0 && onViewMore && (
+        <button
+          onClick={onViewMore}
+          className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-orange-600 text-white text-sm font-semibold hover:from-orange-600 hover:to-orange-700 transition shadow-sm"
+        >
+          <List size={14} /> Ver historial completo
+          <span className="text-xs font-bold bg-white/20 px-2 py-0.5 rounded-full">{totalEvents}</span>
+        </button>
+      )}
     </>
   );
 }
 
+// === Modal de historial completo con paginación ===
+function FullHistoryModal({ events, client, onClose }) {
+  const ITEMS_PER_PAGE = 10;
+  const [page, setPage] = useState(1);
+  const [searchQ, setSearchQ] = useState("");
+  const [catFilter, setCatFilter] = useState("all");
+  const [expandedId, setExpandedId] = useState(null);
+
+  // Filtrar
+  const filtered = useMemo(() => {
+    let result = events;
+    if (catFilter !== "all") {
+      result = result.filter(e => e.category === catFilter);
+    }
+    if (searchQ.trim()) {
+      const q = searchQ.toLowerCase();
+      result = result.filter(e =>
+        (e.title || "").toLowerCase().includes(q) ||
+        (e.description || "").toLowerCase().includes(q) ||
+        (e.date || "").includes(q) ||
+        (e.pet || "").toLowerCase().includes(q) ||
+        (e.status || "").toLowerCase().includes(q)
+      );
+    }
+    return result;
+  }, [events, catFilter, searchQ]);
+
+  // Paginación
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE));
+  const safeP = Math.min(page, totalPages);
+  const pageItems = filtered.slice((safeP - 1) * ITEMS_PER_PAGE, safeP * ITEMS_PER_PAGE);
+
+  // Contadores por categoría
+  const catCounts = useMemo(() => {
+    const c = {};
+    events.forEach(e => { c[e.category] = (c[e.category] || 0) + 1; });
+    return c;
+  }, [events]);
+
+  // Resetear página al cambiar filtro
+  useEffect(() => { setPage(1); }, [catFilter, searchQ]);
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 bg-stone-900/60 z-[60] flex justify-center items-start p-4 sm:p-8 overflow-y-auto">
+      <div onClick={(e) => e.stopPropagation()} className="bg-stone-50 rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "calc(100vh - 4rem)" }}>
+        {/* Header */}
+        <div className="p-5 bg-gradient-to-br from-orange-500 to-orange-600 text-white flex items-center gap-3 flex-shrink-0">
+          <div className="w-11 h-11 rounded-xl bg-white/20 backdrop-blur grid place-items-center flex-shrink-0">
+            <History size={20} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs tracking-widest uppercase opacity-90 font-semibold">Historial completo</div>
+            <h3 className="font-serif text-xl font-semibold mt-0.5 truncate">{client?.name || "Cliente"}</h3>
+          </div>
+          <span className="text-sm font-bold bg-white/20 px-3 py-1 rounded-full">{events.length} registros</span>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 grid place-items-center transition flex-shrink-0">
+            <X size={14} />
+          </button>
+        </div>
+
+        {/* Toolbar: búsqueda + filtros de categoría */}
+        <div className="p-4 border-b border-stone-200 bg-white space-y-3 flex-shrink-0">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+            <input
+              value={searchQ}
+              onChange={(e) => setSearchQ(e.target.value)}
+              placeholder="Buscar por servicio, fecha, mascota..."
+              className="w-full pl-9 pr-8 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-orange-400 focus:bg-white transition"
+            />
+            {searchQ && (
+              <button onClick={() => setSearchQ("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-stone-200 hover:bg-stone-300 grid place-items-center text-stone-500">
+                <X size={9} />
+              </button>
+            )}
+          </div>
+          <div className="flex gap-1.5 overflow-x-auto">
+            <button
+              onClick={() => setCatFilter("all")}
+              className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition border ${
+                catFilter === "all"
+                  ? "bg-stone-900 text-white border-stone-900"
+                  : "bg-white border-stone-200 text-stone-600 hover:border-stone-400"
+              }`}
+            >
+              Todos <span className={`text-[10px] font-bold px-1.5 py-px rounded-full ${catFilter === "all" ? "bg-stone-700 text-white" : "bg-stone-100"}`}>{events.length}</span>
+            </button>
+            {Object.entries(HISTORY_CATEGORIES).map(([catId, cat]) => {
+              const count = catCounts[catId] || 0;
+              if (count === 0) return null;
+              const Icon = cat.Icon;
+              const colors = COLOR_CLASSES[cat.color];
+              return (
+                <button
+                  key={catId}
+                  onClick={() => setCatFilter(catId)}
+                  className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition border ${
+                    catFilter === catId
+                      ? `${colors.bg} ${colors.text} ${colors.border}`
+                      : "bg-white border-stone-200 text-stone-600 hover:border-stone-400"
+                  }`}
+                >
+                  <Icon size={11} /> {cat.label}
+                  <span className={`text-[10px] font-bold px-1.5 py-px rounded-full ${catFilter === catId ? "bg-white/80" : "bg-stone-100"} ${colors.text}`}>{count}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Body: lista paginada */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+          {filtered.length === 0 ? (
+            <div className="py-12 text-center">
+              <Search size={28} className="text-stone-300 mx-auto mb-2" />
+              <div className="text-sm font-semibold text-stone-600">Sin resultados</div>
+              <div className="text-xs text-stone-400 mt-1">Prueba con otros términos o cambia el filtro.</div>
+            </div>
+          ) : (
+            pageItems.map(e => {
+              const cat = HISTORY_CATEGORIES[e.category];
+              if (!cat) return null;
+              const colors = COLOR_CLASSES[cat.color];
+              return (
+                <div key={e.id} className={`rounded-xl border ${colors.border} overflow-hidden`}>
+                  <HistoryEvent
+                    event={e}
+                    colors={colors}
+                    expanded={expandedId === e.id}
+                    onToggle={() => setExpandedId(expandedId === e.id ? null : e.id)}
+                  />
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Footer: paginación */}
+        {totalPages > 1 && (
+          <div className="p-3 border-t border-stone-200 bg-white flex items-center justify-between flex-shrink-0">
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={safeP <= 1}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border border-stone-200 hover:border-orange-300 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft size={12} /> Anterior
+            </button>
+            <div className="text-xs text-stone-600">
+              <span className="font-bold text-orange-700">{(safeP - 1) * ITEMS_PER_PAGE + 1}–{Math.min(safeP * ITEMS_PER_PAGE, filtered.length)}</span>
+              {" "}de <span className="font-bold">{filtered.length}</span>
+            </div>
+            <button
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={safeP >= totalPages}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border border-stone-200 hover:border-orange-300 transition disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Siguiente <ChevronRight size={12} />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Despachador: cada subtipo se renderiza con su propio look
-function HistoryEvent({ event, colors, expanded, onToggle }) {
-  if (event.subtype === "factura")        return <EventInvoice event={event} colors={colors} expanded={expanded} onToggle={onToggle} />;
-  if (event.subtype === "examen")         return <EventExam event={event} colors={colors} expanded={expanded} onToggle={onToggle} />;
+function HistoryEvent({ event, colors, expanded, onToggle, onGoToInvoice }) {
+  if (event.subtype === "recibo")        return <EventInvoice event={event} colors={colors} expanded={expanded} onToggle={onToggle} onGoToInvoice={onGoToInvoice} />;
+  if (event.subtype === "examen")         return <EventExam event={event} colors={colors} expanded={expanded} onToggle={onToggle} onGoToInvoice={onGoToInvoice} />;
   if (event.subtype === "cita-proxima")   return <EventUpcomingAppt event={event} colors={colors} expanded={expanded} onToggle={onToggle} />;
-  if (event.subtype === "cita-realizada") return <EventPastAppt event={event} colors={colors} expanded={expanded} onToggle={onToggle} />;
-  if (event.subtype === "recipe")         return <EventRecipe event={event} colors={colors} expanded={expanded} onToggle={onToggle} />;
-  if (event.subtype === "servicio")       return <EventService event={event} colors={colors} expanded={expanded} onToggle={onToggle} />;
+  if (event.subtype === "cita-realizada") return <EventPastAppt event={event} colors={colors} expanded={expanded} onToggle={onToggle} onGoToInvoice={onGoToInvoice} />;
+  if (event.subtype === "recipe")         return <EventRecipe event={event} colors={colors} expanded={expanded} onToggle={onToggle} onGoToInvoice={onGoToInvoice} />;
+  if (event.subtype === "servicio")       return <EventService event={event} colors={colors} expanded={expanded} onToggle={onToggle} onGoToInvoice={onGoToInvoice} />;
   return null;
 }
 
-// === CAJA · Factura desplegable con desglose ===
-function EventInvoice({ event, colors, expanded, onToggle }) {
+// === CAJA · Recibo desplegable con desglose ===
+function EventInvoice({ event, colors, expanded, onToggle, onGoToInvoice }) {
+  // Usar el número real del recibo (event.invoiceNumber) si está presente,
+  // de lo contrario extraerlo del título como fallback
+  const invNumber = event.invoiceNumber || event.title?.replace("Recibo ", "").replace("#", "") || "";
   return (
     <div>
       <button onClick={onToggle} className="w-full text-left p-3 hover:bg-stone-50 transition">
@@ -12208,6 +15460,15 @@ function EventInvoice({ event, colors, expanded, onToggle }) {
           <div className="flex items-center gap-2 min-w-0">
             <Receipt size={13} className={colors.text} />
             <span className="text-sm font-semibold leading-tight truncate">{event.title}</span>
+            {onGoToInvoice && invNumber && (
+              <span
+                onClick={(e) => { e.stopPropagation(); onGoToInvoice(invNumber); }}
+                title="Ir al recibo en Ventas"
+                className="inline-flex items-center px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200 text-[10px] font-bold cursor-pointer transition flex-shrink-0"
+              >
+                <ExternalLink size={9} />
+              </span>
+            )}
           </div>
           <span className={`text-sm font-bold ${colors.text} font-mono whitespace-nowrap`}>
             ${event.amount.toFixed(2)}
@@ -12217,9 +15478,28 @@ function EventInvoice({ event, colors, expanded, onToggle }) {
           <span>{event.date}</span>
           <span>·</span>
           <span>{event.method}</span>
-          <span className="inline-flex items-center gap-1 px-1.5 py-px rounded bg-emerald-100 text-emerald-700 text-xs font-bold">
+          <span className={`inline-flex items-center gap-1 px-1.5 py-px rounded text-xs font-bold ${
+            event.status === "pagada" ? "bg-emerald-100 text-emerald-700" :
+            event.status === "emitida" ? "bg-blue-100 text-blue-700" :
+            event.status === "borrador" ? "bg-stone-100 text-stone-700" :
+            "bg-amber-100 text-amber-700"
+          }`}>
             <Check size={9} strokeWidth={3} /> {event.status}
           </span>
+          {event.hasRecipe && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-px rounded bg-purple-100 text-purple-700 text-[10px] font-bold uppercase">
+              <FileText size={9} /> Con recipe
+            </span>
+          )}
+          {event.delivery && (
+            <span className={`inline-flex items-center gap-1 px-1.5 py-px rounded text-[10px] font-bold uppercase ${
+              event.delivery.status === "entregado" ? "bg-emerald-100 text-emerald-700" :
+              event.delivery.status === "en-camino" ? "bg-blue-100 text-blue-700" :
+              "bg-amber-100 text-amber-700"
+            }`}>
+              <Truck size={9} /> {event.delivery.status === "preparando" ? "Preparando" : event.delivery.status === "en-camino" ? "En camino" : "Entregado"}
+            </span>
+          )}
           <ChevronDown size={12} className={`text-stone-400 ml-auto transition ${expanded ? "rotate-180" : ""}`} />
         </div>
       </button>
@@ -12235,10 +15515,38 @@ function EventInvoice({ event, colors, expanded, onToggle }) {
                 {event.items.map((it, i) => (
                   <tr key={i}>
                     <td className="py-1.5 pr-2">
-                      <div className="font-semibold text-stone-800">{it.description}</div>
+                      <div className="font-semibold text-stone-800 flex items-center gap-1.5">
+                        {it.description}
+                        {(it.recipe || it.recipePhoto || it.requiresRecipe) && (
+                          <span className="inline-flex items-center gap-0.5 px-1 py-px rounded bg-purple-100 text-purple-700 text-[9px] font-bold uppercase">
+                            <FileText size={8} /> Recipe
+                          </span>
+                        )}
+                      </div>
                       <div className="text-stone-500 mt-0.5">{it.qty} × ${it.unit.toFixed(2)}</div>
+                      {/* Recipe detalle inline */}
+                      {it.recipe && (
+                        <div className="mt-1.5 bg-purple-50 border border-purple-200 rounded-lg p-2 space-y-0.5">
+                          <div className="text-[9px] tracking-widest uppercase text-purple-700 font-bold">Recipe</div>
+                          {it.recipe.medication && <div className="text-purple-900 text-[11px]"><span className="text-purple-600 font-semibold">Medicamento:</span> {it.recipe.medication}</div>}
+                          {it.recipe.dose && <div className="text-purple-900 text-[11px]"><span className="text-purple-600 font-semibold">Dosis:</span> {it.recipe.dose}</div>}
+                          {it.recipe.route && <div className="text-purple-900 text-[11px]"><span className="text-purple-600 font-semibold">Vía:</span> {it.recipe.route}</div>}
+                          {it.recipe.frequency && <div className="text-purple-900 text-[11px]"><span className="text-purple-600 font-semibold">Frecuencia:</span> {it.recipe.frequency}</div>}
+                          {it.recipe.duration && <div className="text-purple-900 text-[11px]"><span className="text-purple-600 font-semibold">Duración:</span> {it.recipe.duration}</div>}
+                          {it.recipe.instructions && <div className="text-purple-900 text-[11px] italic mt-1">"{it.recipe.instructions}"</div>}
+                          {it.recipePhoto && (
+                            <img src={it.recipePhoto} alt="Recipe" className="mt-1.5 w-full max-h-32 object-cover rounded border border-purple-200" />
+                          )}
+                        </div>
+                      )}
+                      {/* Si no hay recipe completo pero el ítem lo requiere */}
+                      {!it.recipe && it.requiresRecipe && (
+                        <div className="mt-1.5 bg-amber-50 border border-amber-200 rounded text-[10px] text-amber-700 px-2 py-1 italic flex items-center gap-1">
+                          <AlertCircle size={9} /> Este medicamento requiere recipe adjunto.
+                        </div>
+                      )}
                     </td>
-                    <td className="py-1.5 text-right font-mono font-bold text-stone-800 whitespace-nowrap">
+                    <td className="py-1.5 text-right font-mono font-bold text-stone-800 whitespace-nowrap align-top">
                       ${it.total.toFixed(2)}
                     </td>
                   </tr>
@@ -12263,7 +15571,7 @@ function EventInvoice({ event, colors, expanded, onToggle }) {
             </table>
           </div>
           <button className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-white border border-stone-200 hover:border-orange-400 text-stone-700 hover:text-orange-700 text-xs font-semibold transition">
-            <Printer size={11} /> Reimprimir factura
+            <Printer size={11} /> Reimprimir recibo
           </button>
         </div>
       )}
@@ -12328,7 +15636,7 @@ function ProcessTracker({ currentState, timeline }) {
 }
 
 // === LABORATORIO · Examen con tracker de proceso ===
-function EventExam({ event, colors, expanded, onToggle }) {
+function EventExam({ event, colors, expanded, onToggle, onGoToInvoice }) {
   const stateLabel = PROCESS_STATES[event.state];
   const badgeClass = PROCESS_BADGE_CLASSES[stateLabel.color];
 
@@ -12364,6 +15672,25 @@ function EventExam({ event, colors, expanded, onToggle }) {
               <div className="font-semibold text-stone-700">{event.lab}</div>
             </div>
           </div>
+
+          {/* Recibo asociada al servicio */}
+          {event.invoiceRef && (
+            <div className="bg-orange-50 border border-orange-200 rounded-lg p-2.5 flex items-center gap-2">
+              <Receipt size={13} className="text-orange-700 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-bold text-orange-800">Recibo {event.invoiceRef.number}</div>
+                <div className="text-[10px] text-orange-600 truncate">{event.invoiceRef.item}</div>
+              </div>
+              <span className="text-xs font-bold text-orange-700 font-mono flex-shrink-0">
+                ${(event.invoiceRef.amount || 0).toFixed(2)}
+              </span>
+              {onGoToInvoice && (
+                <button onClick={() => onGoToInvoice(event.invoiceRef.number)} title="Ir al recibo" className="w-6 h-6 rounded-md bg-orange-200 hover:bg-orange-300 text-orange-700 grid place-items-center transition flex-shrink-0">
+                  <ExternalLink size={10} />
+                </button>
+              )}
+            </div>
+          )}
 
           <ProcessTracker currentState={event.state} timeline={event.timeline} />
 
@@ -12447,7 +15774,7 @@ function EventUpcomingAppt({ event, colors, expanded, onToggle }) {
 }
 
 // === VETERINARIA · Cita realizada ===
-function EventPastAppt({ event, colors, expanded, onToggle }) {
+function EventPastAppt({ event, colors, expanded, onToggle, onGoToInvoice }) {
   return (
     <div>
       <button onClick={onToggle} className="w-full text-left p-3 hover:bg-stone-50 transition">
@@ -12481,6 +15808,70 @@ function EventPastAppt({ event, colors, expanded, onToggle }) {
               <div className="text-xs text-stone-700">{event.treatment}</div>
             </div>
           )}
+          {/* Recibo asociada */}
+          {event.invoiceRef && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 flex items-center gap-2">
+              <Receipt size={13} className="text-amber-700 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-bold text-amber-800">Recibo {event.invoiceRef.number}</div>
+              </div>
+              <span className="text-xs font-bold text-amber-700 font-mono flex-shrink-0">
+                ${(event.invoiceRef.amount || 0).toFixed(2)}
+              </span>
+              {onGoToInvoice && (
+                <button onClick={() => onGoToInvoice(event.invoiceRef.number)} title="Ir al recibo" className="w-6 h-6 rounded-md bg-amber-200 hover:bg-amber-300 text-amber-700 grid place-items-center transition flex-shrink-0">
+                  <ExternalLink size={10} />
+                </button>
+              )}
+            </div>
+          )}
+          {/* Fotos clínicas (si existen en el historial) */}
+          {event.photos?.length > 0 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5">
+              <div className="text-xs tracking-widest uppercase text-blue-700 font-semibold mb-1.5">
+                📷 Fotos clínicas · {event.photos.length}
+              </div>
+              <div className="grid grid-cols-3 gap-1">
+                {event.photos.map((ph, i) => (
+                  <div key={ph.id || i} className="rounded overflow-hidden border border-blue-200">
+                    <img src={ph.data} alt={ph.caption || ""} className="w-full h-16 object-cover" />
+                    {ph.caption && <div className="text-[9px] text-blue-800 px-1 py-0.5 bg-blue-50">{ph.caption}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* Recetas médicas (si existen en el historial) */}
+          {event.recipes?.length > 0 && (
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-2.5">
+              <div className="text-xs tracking-widest uppercase text-purple-700 font-semibold mb-1.5">
+                💊 Recetas · {event.recipes.length}
+              </div>
+              {event.recipes.map((rx, i) => (
+                <div key={rx.id || i} className="bg-white border border-purple-100 rounded-lg p-2 mb-1 last:mb-0">
+                  <div className="text-xs font-bold text-purple-900">{rx.medication || "Sin nombre"}</div>
+                  <div className="text-[11px] text-purple-700">
+                    {[rx.dose, rx.route, rx.frequency, rx.duration].filter(Boolean).join(" · ")}
+                  </div>
+                  {rx.instructions && (
+                    <div className="text-[10px] text-stone-600 italic mt-0.5">{rx.instructions}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Insumos usados */}
+          {event.supplies?.length > 0 && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2.5">
+              <div className="text-xs tracking-widest uppercase text-emerald-700 font-semibold mb-1">Insumos</div>
+              {event.supplies.map((s, i) => (
+                <div key={i} className="flex items-center justify-between text-xs">
+                  <span className="text-emerald-900">{s.name}</span>
+                  <span className="text-emerald-700 font-mono">{s.qty} × ${(s.unit || 0).toFixed(0)}</span>
+                </div>
+              ))}
+            </div>
+          )}
           {event.note && (
             <div className="text-xs text-stone-600 italic px-1">{event.note}</div>
           )}
@@ -12491,7 +15882,7 @@ function EventPastAppt({ event, colors, expanded, onToggle }) {
 }
 
 // === FARMACIA · Recipe con tracker ===
-function EventRecipe({ event, colors, expanded, onToggle }) {
+function EventRecipe({ event, colors, expanded, onToggle, onGoToInvoice }) {
   const stateLabel = PROCESS_STATES[event.state];
   const badgeClass = PROCESS_BADGE_CLASSES[stateLabel.color];
 
@@ -12502,6 +15893,16 @@ function EventRecipe({ event, colors, expanded, onToggle }) {
           <div className="flex items-center gap-2 min-w-0">
             <Pill size={13} className={colors.text} />
             <span className="text-sm font-semibold leading-tight truncate">{event.title}</span>
+            {/* Flecha → ir al recibo en Ventas */}
+            {event.invoiceRef && onGoToInvoice && (
+              <span
+                onClick={(e) => { e.stopPropagation(); onGoToInvoice(event.invoiceRef.number); }}
+                title={`Ir al recibo ${event.invoiceRef.number}`}
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 hover:bg-orange-200 text-[10px] font-bold cursor-pointer transition flex-shrink-0"
+              >
+                <ExternalLink size={9} />
+              </span>
+            )}
           </div>
           <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border whitespace-nowrap ${badgeClass}`}>
             {stateLabel.label}
@@ -12523,6 +15924,25 @@ function EventRecipe({ event, colors, expanded, onToggle }) {
             Recetado por <strong className="text-stone-700">{event.prescribedBy}</strong>
           </div>
 
+          {/* Recibo asociada */}
+          {event.invoiceRef && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 flex items-center gap-2">
+              <Receipt size={13} className="text-amber-700 flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-bold text-amber-800">Recibo {event.invoiceRef.number}</div>
+                {event.invoiceRef.item && <div className="text-[10px] text-amber-600 truncate">{event.invoiceRef.item}</div>}
+              </div>
+              <span className="text-xs font-bold text-amber-700 font-mono flex-shrink-0">
+                ${(event.invoiceRef.amount || 0).toFixed(2)}
+              </span>
+              {onGoToInvoice && (
+                <button onClick={() => onGoToInvoice(event.invoiceRef.number)} title="Ir al recibo" className="w-6 h-6 rounded-md bg-amber-200 hover:bg-amber-300 text-amber-700 grid place-items-center transition flex-shrink-0">
+                  <ExternalLink size={10} />
+                </button>
+              )}
+            </div>
+          )}
+
           <div className="bg-purple-50 border border-purple-200 rounded-lg p-2.5 space-y-1.5">
             <div className="text-xs tracking-widest uppercase text-purple-700 font-semibold">
               Medicamentos
@@ -12543,7 +15963,7 @@ function EventRecipe({ event, colors, expanded, onToggle }) {
 }
 
 // === OTROS SERVICIOS ===
-function EventService({ event, colors, expanded, onToggle }) {
+function EventService({ event, colors, expanded, onToggle, onGoToInvoice }) {
   return (
     <div>
       <button onClick={onToggle} className="w-full text-left p-3 hover:bg-stone-50 transition">
@@ -12551,6 +15971,15 @@ function EventService({ event, colors, expanded, onToggle }) {
           <div className="flex items-center gap-2 min-w-0">
             <Truck size={13} className={colors.text} />
             <span className="text-sm font-semibold leading-tight truncate">{event.title}</span>
+            {onGoToInvoice && event.invoiceRef && (
+              <span
+                onClick={(e) => { e.stopPropagation(); onGoToInvoice((event.invoiceRef.number || "").replace("#", "")); }}
+                title="Ir al recibo"
+                className="inline-flex items-center px-1.5 py-0.5 rounded bg-stone-200 text-stone-600 hover:bg-stone-300 text-[10px] font-bold cursor-pointer transition flex-shrink-0"
+              >
+                <ExternalLink size={9} />
+              </span>
+            )}
           </div>
           {event.amount !== undefined && (
             <span className="text-sm font-bold text-stone-700 font-mono whitespace-nowrap">
@@ -12603,20 +16032,37 @@ function DrawerPets({ pets, expandedPet, setExpandedPet, onOpenPassport }) {
         const eventCount = pet.events?.length || 0;
         const lastEvent = pet.events?.[0];
         return (
-          <button
+          <div
             key={pet.code}
-            onClick={() => setExpandedPet(expanded ? null : pet.code)}
-            className={`w-full text-left bg-white border rounded-xl transition cursor-pointer overflow-hidden ${
+            className={`w-full text-left bg-white border rounded-xl transition overflow-hidden ${
               expanded ? "border-orange-400 shadow-md" : "border-stone-200 hover:border-orange-300"
             }`}
           >
-            <div className="flex items-center gap-3 p-3">
+            <div
+              onClick={() => setExpandedPet(expanded ? null : pet.code)}
+              className="flex items-center gap-3 p-3 cursor-pointer"
+            >
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-200 to-orange-100 grid place-items-center text-orange-800 flex-shrink-0 border border-orange-200">
                 <Icon size={18} strokeWidth={1.8} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline gap-1.5">
                   <span className="font-semibold text-sm truncate">{pet.name}</span>
+                  {/* Lupa: atajo directo al pasaporte sin tener que expandir la card.
+                      Útil cuando el usuario quiere ir derecho al historial clínico.
+                      Solo se muestra si la mascota tiene pasaporte (no para "externas"). */}
+                  {!pet.isExtra && onOpenPassport && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpenPassport(pet.code);
+                      }}
+                      title="Ver pasaporte de la mascota"
+                      className="w-6 h-6 rounded-md bg-stone-100 hover:bg-orange-100 grid place-items-center text-stone-500 hover:text-orange-700 transition flex-shrink-0"
+                    >
+                      <Search size={11} strokeWidth={2} />
+                    </button>
+                  )}
                   {pet.isExtra && <span className="text-xs text-stone-400 italic">· externo</span>}
                 </div>
                 <div className="font-mono text-xs text-orange-700 font-bold tracking-wider">
@@ -12660,7 +16106,7 @@ function DrawerPets({ pets, expandedPet, setExpandedPet, onOpenPassport }) {
                 </div>
               </div>
             )}
-          </button>
+          </div>
         );
       })}
     </>
@@ -12695,16 +16141,27 @@ function MetricCard({ icon: Icon, label, value, accent }) {
   );
 }
 
-// ========== VISTA: VENTAS / FACTURACIÓN ==========
+// ========== VISTA: VENTAS / RECIBOS ==========
 
-function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, setPaymentPlans, onMessageClient, modules = [], userRole = "super", customRoles = [] }) {
+function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, setPaymentPlans, onMessageClient, modules = [], userRole = "super", customRoles = [], activeSedeId = null, sedes = [], initialSearch = "", onSearchConsumed }) {
   const [activeTab, setActiveTab] = useState("kanban"); // kanban | list | history | debtors | plans
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [showPayment, setShowPayment] = useState(false);
   const [showCreatePlan, setShowCreatePlan] = useState(false);
   // Toggle para mostrar la columna "En plan de pago" en el kanban (oculta por defecto)
   const [showPlanColumn, setShowPlanColumn] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useState(initialSearch || "");
+
+  // Si llegamos con un initialSearch (ej. desde el historial del cliente),
+  // switchear a vista lista para que la búsqueda se vea y consumir el valor.
+  useEffect(() => {
+    if (initialSearch) {
+      setSearchQuery(initialSearch);
+      setActiveTab("list");
+      onSearchConsumed?.();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // === Filtro por sede ===
   // Para super: dropdown manual con todas las sedes + opción "Todas"/"Sin sede".
@@ -12730,17 +16187,30 @@ function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, 
     [modules]
   );
 
-  // Aplicar el filtro de sede a las facturas. Esto se hace ANTES del search/state filter.
+  // Aplicar el filtro de sede a las recibos.
+  // Lógica:
+  // 1. Si hay activeSedeId, mostramos recibos cuyo moduleId pertenezca a un módulo de esa sede.
+  //    Esto incluye recibos con campo `sedeId` explícito que coincida (por si en el futuro se asigna directo).
+  // 2. Si el rol está restringido (assignedModuleIds), también respetamos ese filtro de roles.
+  // 3. Si NO hay sede activa (fallback), comportamiento legacy.
   const sceneFilteredInvoices = useMemo(() => {
-    // Si el rol está restringido por sus assignedModuleIds, solo ve facturas de esas
-    if (isRestrictedByRole) {
-      return invoicesAll.filter(inv => restrictedModuleIds.includes(inv.moduleId));
+    let result = invoicesAll;
+    // Filtro por sede activa
+    if (activeSedeId) {
+      const moduleIdsOfSede = (modules || [])
+        .filter(m => m.sedeId === activeSedeId && !m.removed)
+        .map(m => m.id);
+      result = result.filter(inv =>
+        inv.sedeId === activeSedeId ||
+        (inv.moduleId && moduleIdsOfSede.includes(inv.moduleId))
+      );
     }
-    // Si super filtró manualmente
-    if (moduleFilter === "all") return invoicesAll;
-    if (moduleFilter === "none") return invoicesAll.filter(inv => !inv.moduleId);
-    return invoicesAll.filter(inv => inv.moduleId === moduleFilter);
-  }, [invoicesAll, moduleFilter, isRestrictedByRole, restrictedModuleIds]);
+    // Filtro adicional por rol restringido (compatibilidad)
+    if (isRestrictedByRole) {
+      result = result.filter(inv => restrictedModuleIds.includes(inv.moduleId));
+    }
+    return result;
+  }, [invoicesAll, activeSedeId, modules, isRestrictedByRole, restrictedModuleIds]);
 
   // Helper para encontrar cliente
   const clientMap = useMemo(() => {
@@ -12755,7 +16225,17 @@ function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, 
   // Esto permite que las stats, kanbans, listas, etc. usen automáticamente el filtro.
   const invoices = sceneFilteredInvoices;
 
-  // Filtrado por búsqueda — defensivo contra facturas con campos faltantes
+  // === Planes de pago filtrados por sede ===
+  // Cruzamos los paymentPlans con las invoices ya filtradas. Si un plan pertenece
+  // a una recibo que no está visible en esta sede, el plan tampoco se muestra.
+  // Esto evita que María Pérez (Pet 1) aparezca con plan de pago cuando estás en Pet 2.
+  const visibleInvoiceIds = useMemo(() => new Set(invoices.map(i => i.id)), [invoices]);
+  const paymentPlansFiltered = useMemo(
+    () => (paymentPlans || []).filter(p => visibleInvoiceIds.has(p.invoiceId)),
+    [paymentPlans, visibleInvoiceIds]
+  );
+
+  // Filtrado por búsqueda — defensivo contra recibos con campos faltantes
   const filtered = useMemo(() => {
     if (!searchQuery.trim()) return invoices;
     const q = searchQuery.toLowerCase();
@@ -12766,7 +16246,7 @@ function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, 
     });
   }, [invoices, searchQuery, clientMap]);
 
-  // Stats — defensivos contra facturas con campos faltantes para no crashear la vista
+  // Stats — defensivos contra recibos con campos faltantes para no crashear la vista
   const stats = useMemo(() => {
     const totalInvoiced = invoices.reduce((s, i) => s + (i.total ?? 0), 0);
     const totalCollected = invoices.reduce((s, i) => s + (i.paid ?? 0), 0);
@@ -12819,117 +16299,12 @@ function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, 
 
   return (
     <div className="space-y-5">
-      {/* Hero con KPIs */}
-      <div className="relative p-6 rounded-2xl bg-gradient-to-br from-white via-orange-50 to-orange-100 border border-stone-200 overflow-hidden">
-        <div className="flex items-center gap-4 flex-wrap">
-          <div className="flex-1 min-w-0">
-            <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold mb-1">
-              Operación · Facturación
-            </div>
-            <h2 className="font-serif text-3xl font-semibold leading-tight">
-              <span className="text-orange-700">{invoices.length}</span> facturas en sistema
-            </h2>
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            <SalesKpi label="Facturado" value={`$${(stats.totalInvoiced / 1000).toFixed(1)}k`} />
-            <SalesKpi label="Cobrado"   value={`$${(stats.totalCollected / 1000).toFixed(1)}k`} accent="emerald" />
-            <SalesKpi label="Por cobrar" value={`$${(stats.totalDebt / 1000).toFixed(1)}k`} accent={stats.totalDebt > 0 ? "red" : null} />
-          </div>
-        </div>
-      </div>
-
-      {/* === Filtro por sede === */}
-      {/* Solo el super tiene control manual. Roles custom restringidos ven el chip
-          informativo. Los core (vet/grooming/sales) ven facturas según sus permisos
-          de matriz, no por sede — así que no mostramos el filtro. */}
-      {(isSuperUser || isRestrictedByRole) && visibleModules.length > 0 && (
-        <div className="bg-white border border-stone-200 rounded-2xl shadow-sm px-5 py-3 flex items-center gap-3 flex-wrap">
-          <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold flex items-center gap-2">
-            <span className="w-7 h-7 rounded-lg bg-orange-100 text-orange-700 grid place-items-center">
-              📍
-            </span>
-            Filtrar por sede
-          </div>
-          {isRestrictedByRole ? (
-            // Rol restringido: chip informativo, no editable
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {restrictedModuleIds.map(mid => {
-                const m = visibleModules.find(mm => mm.id === mid);
-                if (!m) return null;
-                return (
-                  <span
-                    key={mid}
-                    className={`text-xs font-bold px-2 py-1 rounded-lg ${
-                      m.kind === "vet" ? "bg-orange-100 text-orange-700" :
-                      m.kind === "grooming" ? "bg-emerald-100 text-emerald-700" :
-                      m.kind === "standard" ? "bg-blue-100 text-blue-700" :
-                      "bg-stone-100 text-stone-700"
-                    }`}
-                  >
-                    {m.name}
-                  </span>
-                );
-              })}
-              <span className="text-xs text-stone-500 ml-2 italic">Tu rol está asignado a estas sedes.</span>
-            </div>
-          ) : (
-            // Super: dropdown manual con todas las opciones
-            <div className="flex items-center gap-1.5 flex-wrap flex-1">
-              <button
-                onClick={() => setModuleFilter("all")}
-                className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition ${
-                  moduleFilter === "all"
-                    ? "bg-stone-900 text-white shadow"
-                    : "bg-stone-100 text-stone-700 hover:bg-stone-200"
-                }`}
-              >
-                Todas las sedes ({invoicesAll.length})
-              </button>
-              {visibleModules.map(m => {
-                const count = invoicesAll.filter(inv => inv.moduleId === m.id).length;
-                if (count === 0) return null;
-                return (
-                  <button
-                    key={m.id}
-                    onClick={() => setModuleFilter(m.id)}
-                    className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
-                      moduleFilter === m.id
-                        ? (m.kind === "vet" ? "bg-orange-600 text-white shadow" :
-                           m.kind === "grooming" ? "bg-emerald-600 text-white shadow" :
-                           m.kind === "standard" ? "bg-blue-600 text-white shadow" :
-                           "bg-stone-700 text-white shadow")
-                        : "bg-white border border-stone-200 text-stone-700 hover:border-stone-400"
-                    }`}
-                  >
-                    {m.name} <span className="opacity-70">({count})</span>
-                  </button>
-                );
-              })}
-              {(() => {
-                const noneCount = invoicesAll.filter(inv => !inv.moduleId).length;
-                if (noneCount === 0) return null;
-                return (
-                  <button
-                    onClick={() => setModuleFilter("none")}
-                    className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition ${
-                      moduleFilter === "none"
-                        ? "bg-stone-700 text-white shadow"
-                        : "bg-white border border-stone-200 text-stone-700 hover:border-stone-400"
-                    }`}
-                  >
-                    Sin sede ({noneCount})
-                  </button>
-                );
-              })()}
-            </div>
-          )}
-        </div>
-      )}
+      {/* Filtro de sede eliminado: la sede ahora se controla desde las pestañas globales del CRM (CRMHubView). */}
 
       {/* Tabs principales */}
       <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-1.5 flex gap-1 overflow-x-auto">
         {(() => {
-          const activePlansCount = paymentPlans.filter(p => {
+          const activePlansCount = paymentPlansFiltered.filter(p => {
             if (p.status === "deleted" || p.status === "completed") return false;
             if (p.installments.length > 0 && p.installments.every(i => i.paid)) return false;
             return true;
@@ -12978,7 +16353,7 @@ function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, 
               <input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Buscar por número de factura, cliente o cédula..."
+                placeholder="Buscar por número de recibo, cliente o cédula..."
                 className="w-full pl-11 pr-10 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-orange-500 focus:bg-white"
               />
               {searchQuery && (
@@ -13015,7 +16390,7 @@ function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, 
           invoices={filtered}
           clientMap={clientMap}
           onSelect={setSelectedInvoice}
-          paymentPlans={paymentPlans}
+          paymentPlans={paymentPlansFiltered}
           showPlanColumn={showPlanColumn}
           onMoveState={(invoiceId, newState) => {
             setInvoices(prev => prev.map(inv => {
@@ -13041,7 +16416,7 @@ function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, 
           clientMap={clientMap}
           onSelect={(inv) => { setSelectedInvoice(inv); setShowPayment(true); }}
           onCreatePlan={(inv) => { setSelectedInvoice(inv); setShowCreatePlan(true); }}
-          plansByInvoice={paymentPlans.reduce((acc, p) => {
+          plansByInvoice={paymentPlansFiltered.reduce((acc, p) => {
             if (p.status !== "deleted") acc[p.invoiceId] = p;
             return acc;
           }, {})}
@@ -13049,7 +16424,7 @@ function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, 
       )}
       {activeTab === "plans" && (
         <SalesPaymentPlans
-          plans={paymentPlans}
+          plans={paymentPlansFiltered}
           invoices={invoices}
           clientMap={clientMap}
           onPayInstallment={(planId, instId, voucher, method) => {
@@ -13079,7 +16454,7 @@ function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, 
               };
             }));
 
-            // 2. Actualizar la factura: agregar pago, recalcular saldo, transicionar a "pagado" si saldo = 0
+            // 2. Actualizar la recibo: agregar pago, recalcular saldo, transicionar a "pagado" si saldo = 0
             let updatedInv = null;
             setInvoices(invs => invs.map(inv => {
               if (inv.id !== plan.invoiceId) return inv;
@@ -13108,14 +16483,14 @@ function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, 
               return result;
             }));
 
-            // 3. Refrescar el drawer si es la misma factura
+            // 3. Refrescar el drawer si es la misma recibo
             if (updatedInv && selectedInvoice && selectedInvoice.id === plan.invoiceId) {
               setSelectedInvoice(updatedInv);
             }
           }}
           onDeletePlan={(planId) => {
             // Marcar como eliminado en lugar de borrar (para auditoría)
-            // Las cuotas pagadas ya están registradas como pagos en la factura
+            // Las cuotas pagadas ya están registradas como pagos en la recibo
             setPaymentPlans(plans => plans.map(p =>
               p.id === planId
                 ? { ...p, status: "deleted", deletedAt: new Date().toISOString().slice(0, 10) }
@@ -13125,9 +16500,9 @@ function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, 
         />
       )}
       {activeTab === "history" && (() => {
-        // Conjunto de invoiceIds cuyo plan está 100% pagado (aunque la factura siga sin transicionar)
+        // Conjunto de invoiceIds cuyo plan está 100% pagado (aunque la recibo siga sin transicionar)
         const invoicesWithCompletedPlan = new Set(
-          paymentPlans
+          paymentPlansFiltered
             .filter(p => p.status !== "deleted" && p.installments.length > 0 && p.installments.every(i => i.paid))
             .map(p => p.invoiceId)
         );
@@ -13138,17 +16513,18 @@ function SalesView({ invoices: invoicesAll, setInvoices, clients, paymentPlans, 
           <SalesHistory
             invoices={historicInvoices}
             clientMap={clientMap}
-            paymentPlans={paymentPlans}
+            paymentPlans={paymentPlansFiltered}
             onSelect={setSelectedInvoice}
           />
         );
       })()}
 
-      {/* Modal: detalle de factura */}
+      {/* Modal: detalle de recibo */}
       {selectedInvoice && !showPayment && !showCreatePlan && (
         <InvoiceDetailModal
           invoice={selectedInvoice}
           client={clientMap[selectedInvoice.clientId]}
+          invoices={invoicesAll}
           onClose={() => setSelectedInvoice(null)}
           onPayment={() => setShowPayment(true)}
           onCreatePlan={() => setShowCreatePlan(true)}
@@ -13213,10 +16589,10 @@ function SalesKpi({ label, value, accent }) {
   );
 }
 
-// ========== KANBAN DE FACTURAS ==========
+// ========== KANBAN DE RECIBOS ==========
 
 function SalesKanban({ invoices, clientMap, onSelect, paymentPlans = [], showPlanColumn = false, onMoveState }) {
-  // Set de IDs de facturas que tienen plan ACTIVO (no eliminado)
+  // Set de IDs de recibos que tienen plan ACTIVO (no eliminado)
   const planInvoiceIds = useMemo(() => {
     const s = new Set();
     paymentPlans.forEach(p => {
@@ -13227,7 +16603,7 @@ function SalesKanban({ invoices, clientMap, onSelect, paymentPlans = [], showPla
 
   // === Drag & drop SOLO HACIA ADELANTE: borrador → emitido → pagado → finalizado ===
   // No se permite retroceder, ni mover a/desde la columna especial "in-plan".
-  // Las facturas vencidas tampoco se arrastran (son una alerta, no un estado regular).
+  // Las recibos vencidas tampoco se arrastran (son una alerta, no un estado regular).
   const STATE_ORDER = { borrador: 1, emitido: 2, pagado: 3, finalizado: 4 };
   const canMoveTo = (from, to) => {
     if (from === to) return false;
@@ -13355,7 +16731,7 @@ function SalesKanban({ invoices, clientMap, onSelect, paymentPlans = [], showPla
                       "border-stone-200"
                     }`}
                   >
-                    {/* Cinta diagonal cuando la factura fue modificada por propuesta aprobada */}
+                    {/* Cinta diagonal cuando la recibo fue modificada por propuesta aprobada */}
                     {wasModified && (
                       <div className="absolute -top-px -right-px overflow-hidden w-20 h-20 pointer-events-none">
                         <div className="absolute top-3 -right-7 w-28 transform rotate-45 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white text-xs font-bold py-0.5 text-center shadow">
@@ -13363,7 +16739,7 @@ function SalesKanban({ invoices, clientMap, onSelect, paymentPlans = [], showPla
                         </div>
                       </div>
                     )}
-                    {/* Cinta para facturas creadas desde una propuesta aprobada */}
+                    {/* Cinta para recibos creadas desde una propuesta aprobada */}
                     {cameFromProposal && !wasModified && (
                       <div className="absolute -top-px -right-px overflow-hidden w-20 h-20 pointer-events-none">
                         <div className="absolute top-3 -right-7 w-28 transform rotate-45 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white text-xs font-bold py-0.5 text-center shadow">
@@ -13379,7 +16755,7 @@ function SalesKanban({ invoices, clientMap, onSelect, paymentPlans = [], showPla
                         </div>
                       </div>
                     )}
-                    {/* Cinta para facturas con pago anticipado, esperando que se preste el servicio */}
+                    {/* Cinta para recibos con pago anticipado, esperando que se preste el servicio */}
                     {isPaidInAdvance && !isServiceCompleted && !wasModified && !cameFromProposal && (
                       <div className="absolute -top-px -right-px overflow-hidden w-24 h-24 pointer-events-none">
                         <div className="absolute top-4 -right-7 w-32 transform rotate-45 bg-gradient-to-r from-blue-500 to-blue-700 text-white text-xs font-bold py-0.5 text-center shadow">
@@ -13416,7 +16792,7 @@ function SalesKanban({ invoices, clientMap, onSelect, paymentPlans = [], showPla
               })}
               {list.length === 0 && (
                 <div className="text-xs text-stone-400 text-center py-6">
-                  Sin facturas
+                  Sin recibos
                 </div>
               )}
             </div>
@@ -13428,16 +16804,25 @@ function SalesKanban({ invoices, clientMap, onSelect, paymentPlans = [], showPla
   );
 }
 
-// ========== LISTA DE FACTURAS ==========
+// ========== LISTA DE RECIBOS ==========
 
 function SalesList({ invoices, clientMap, onSelect }) {
+  const PER_PAGE = 50;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(invoices.length / PER_PAGE));
+  const safePage = Math.min(page, totalPages);
+  const pageInvoices = invoices.slice((safePage - 1) * PER_PAGE, safePage * PER_PAGE);
+
+  // Reset page when filters change
+  useEffect(() => { setPage(1); }, [invoices.length]);
+
   return (
     <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead className="bg-stone-50 border-b border-stone-200">
             <tr>
-              <th className="text-left px-4 py-3 text-xs tracking-widest uppercase text-stone-500 font-semibold">Factura</th>
+              <th className="text-left px-4 py-3 text-xs tracking-widest uppercase text-stone-500 font-semibold">Recibo</th>
               <th className="text-left px-4 py-3 text-xs tracking-widest uppercase text-stone-500 font-semibold">Cliente</th>
               <th className="text-left px-4 py-3 text-xs tracking-widest uppercase text-stone-500 font-semibold">Fecha</th>
               <th className="text-left px-4 py-3 text-xs tracking-widest uppercase text-stone-500 font-semibold">Estado</th>
@@ -13446,7 +16831,7 @@ function SalesList({ invoices, clientMap, onSelect }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-stone-100">
-            {invoices.map(inv => {
+            {pageInvoices.map(inv => {
               const c = clientMap[inv.clientId];
               const stateInfo = INVOICE_STATES[inv.state];
               return (
@@ -13478,13 +16863,40 @@ function SalesList({ invoices, clientMap, onSelect }) {
             {invoices.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-4 py-12 text-center text-stone-400 text-sm">
-                  Sin facturas para mostrar.
+                  Sin recibos para mostrar.
                 </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
+
+      {/* Paginación — solo si hay más de PER_PAGE */}
+      {totalPages > 1 && (
+        <div className="px-4 py-3 border-t border-stone-200 bg-stone-50 flex items-center justify-between">
+          <button
+            onClick={() => setPage(p => Math.max(1, p - 1))}
+            disabled={safePage <= 1}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border border-stone-200 hover:border-orange-300 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <ChevronLeft size={12} /> Anterior
+          </button>
+          <div className="flex items-center gap-1.5 text-xs text-stone-600">
+            <span className="font-bold text-orange-700">
+              {(safePage - 1) * PER_PAGE + 1}–{Math.min(safePage * PER_PAGE, invoices.length)}
+            </span>
+            de <span className="font-bold">{invoices.length}</span> recibos
+            <span className="text-stone-400 ml-1">· Página {safePage} de {totalPages}</span>
+          </div>
+          <button
+            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            disabled={safePage >= totalPages}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold border border-stone-200 hover:border-orange-300 transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Siguiente <ChevronRight size={12} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -13492,7 +16904,21 @@ function SalesList({ invoices, clientMap, onSelect }) {
 // ========== HISTÓRICO (read-only) ==========
 
 function SalesHistory({ invoices, clientMap, onSelect, paymentPlans = [] }) {
-  // Mapear plan por factura para enriquecer cada card
+  // Vista: "list" (cards expandidas, como antes) | "table" (compacta, muchos a la vez)
+  const [viewMode, setViewMode] = useState("list");
+
+  // === Configuración de la vista tabla ===
+  // Columnas visibles — el admin puede ocultar lo que no necesite.
+  const [visibleCols, setVisibleCols] = useState({
+    number: true, client: true, date: true, state: true, payments: true, vouchers: true, total: true,
+  });
+  // Orden — key (qué columna) + dir (asc | desc)
+  const [sortKey, setSortKey] = useState("date");
+  const [sortDir, setSortDir] = useState("desc");
+  // Dropdown de filtro de columnas
+  const [showColMenu, setShowColMenu] = useState(false);
+
+  // Mapear plan por recibo para enriquecer cada card
   const planByInvoice = useMemo(() => {
     const m = {};
     paymentPlans.forEach(p => {
@@ -13515,13 +16941,13 @@ function SalesHistory({ invoices, clientMap, onSelect, paymentPlans = [] }) {
       <div className="space-y-3">
         <div className="bg-stone-100 border border-stone-200 rounded-xl p-3 flex items-center gap-2 text-xs text-stone-600">
           <Lock size={13} className="flex-shrink-0" />
-          <span>El histórico es solo lectura. Las facturas pagadas y finalizadas se conservan inalteradas para auditoría.</span>
+          <span>El histórico es solo lectura. Las recibos pagadas y finalizadas se conservan inalteradas para auditoría.</span>
         </div>
         <div className="bg-white border border-stone-200 rounded-2xl p-12 text-center">
           <History size={32} className="text-stone-300 mx-auto mb-3" />
-          <div className="text-base font-semibold text-stone-700">Aún no hay facturas en histórico</div>
+          <div className="text-base font-semibold text-stone-700">Aún no hay recibos en histórico</div>
           <div className="text-sm text-stone-500 mt-1">
-            Las facturas aparecerán aquí cuando pasen a <strong>Pagado</strong> o <strong>Finalizado</strong>.
+            Las recibos aparecerán aquí cuando pasen a <strong>Pagado</strong> o <strong>Finalizado</strong>.
           </div>
         </div>
       </div>
@@ -13532,10 +16958,263 @@ function SalesHistory({ invoices, clientMap, onSelect, paymentPlans = [] }) {
     <div className="space-y-3">
       <div className="bg-stone-100 border border-stone-200 rounded-xl p-3 flex items-center gap-2 text-xs text-stone-600">
         <Lock size={13} className="flex-shrink-0" />
-        <span>El histórico es solo lectura. Las facturas pagadas y finalizadas se conservan inalteradas para auditoría.</span>
+        <span className="flex-1">El histórico es solo lectura. Las recibos pagadas y finalizadas se conservan inalteradas para auditoría.</span>
+        {/* Filtro de columnas — solo en vista tabla */}
+        {viewMode === "table" && (
+          <div className="relative">
+            <button
+              onClick={() => setShowColMenu(v => !v)}
+              title="Mostrar / ocultar columnas"
+              className={`flex items-center gap-1 px-2 h-7 rounded text-[10px] font-semibold uppercase tracking-wider transition ${
+                showColMenu ? "bg-stone-900 text-white" : "bg-white border border-stone-200 text-stone-600 hover:border-stone-400"
+              }`}
+            >
+              <Filter size={11} /> Columnas
+            </button>
+            {showColMenu && (
+              <>
+                <div onClick={() => setShowColMenu(false)} className="fixed inset-0 z-30"></div>
+                <div className="absolute right-0 top-9 w-52 bg-white border border-stone-200 rounded-xl shadow-2xl z-40 overflow-hidden">
+                  <div className="px-3 py-2 border-b border-stone-100 text-[10px] tracking-widest uppercase text-stone-500 font-bold">
+                    Columnas visibles
+                  </div>
+                  {[
+                    { id: "number",    label: "Recibo" },
+                    { id: "client",    label: "Cliente" },
+                    { id: "date",      label: "Fecha cerrada" },
+                    { id: "state",     label: "Estado" },
+                    { id: "payments",  label: "Pagos" },
+                    { id: "vouchers",  label: "Comprobantes" },
+                    { id: "total",     label: "Total" },
+                  ].map(col => (
+                    <label key={col.id} className="flex items-center gap-2 px-3 py-2 hover:bg-stone-50 cursor-pointer transition">
+                      <input
+                        type="checkbox"
+                        checked={!!visibleCols[col.id]}
+                        onChange={(e) => setVisibleCols(prev => ({ ...prev, [col.id]: e.target.checked }))}
+                        className="w-3.5 h-3.5 accent-orange-600"
+                      />
+                      <span className="text-xs text-stone-700 flex-1">{col.label}</span>
+                    </label>
+                  ))}
+                  <div className="border-t border-stone-100 px-3 py-1.5 flex gap-1.5">
+                    <button
+                      onClick={() => setVisibleCols({ number: true, client: true, date: true, state: true, payments: true, vouchers: true, total: true })}
+                      className="flex-1 px-2 py-1 rounded text-[10px] font-semibold bg-stone-100 hover:bg-stone-200 text-stone-700 transition"
+                    >
+                      Mostrar todas
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        {/* Toggle Vista: Lista / Tabla */}
+        <div className="flex items-center gap-0.5 bg-white border border-stone-200 rounded-lg p-0.5 flex-shrink-0">
+          <button
+            onClick={() => setViewMode("list")}
+            title="Vista de lista (expandida)"
+            className={`w-7 h-7 rounded grid place-items-center transition ${
+              viewMode === "list" ? "bg-stone-900 text-white" : "text-stone-500 hover:bg-stone-100"
+            }`}
+          >
+            <Menu size={12} />
+          </button>
+          <button
+            onClick={() => setViewMode("table")}
+            title="Vista de tabla (compacta)"
+            className={`w-7 h-7 rounded grid place-items-center transition ${
+              viewMode === "table" ? "bg-stone-900 text-white" : "text-stone-500 hover:bg-stone-100"
+            }`}
+          >
+            <Table size={12} />
+          </button>
+        </div>
       </div>
 
-      {sorted.map(inv => {
+      {/* === VISTA TABLA — Compacta, varios elementos a la vez === */}
+      {viewMode === "table" && (() => {
+        // Helper para extraer la fecha de cierre (se repite en sort + render)
+        const closeDateOf = (inv) => inv.finalizedAt || (inv.payments?.[inv.payments.length - 1]?.date) || inv.issueDate || "";
+        // Helper para extraer el número de pagos
+        const paymentCountOf = (inv) => {
+          const plan = planByInvoice[inv.id];
+          return plan ? plan.installments.filter(i => i.paid).length : (inv.payments || []).length;
+        };
+        // Helper para contar comprobantes (vouchers) registrados vs pagos hechos
+        const voucherCountOf = (inv) => {
+          const plan = planByInvoice[inv.id];
+          if (plan) {
+            const paid = plan.installments.filter(i => i.paid);
+            return { withVoucher: paid.filter(i => i.voucher).length, total: paid.length };
+          }
+          const pays = inv.payments || [];
+          return { withVoucher: pays.filter(p => p.voucher).length, total: pays.length };
+        };
+        // Orden dinámico por la columna seleccionada
+        const tableData = [...sorted].sort((a, b) => {
+          let cmp = 0;
+          if (sortKey === "number") cmp = (a.number || "").localeCompare(b.number || "");
+          else if (sortKey === "client") cmp = (clientMap[a.clientId]?.name || "").localeCompare(clientMap[b.clientId]?.name || "");
+          else if (sortKey === "date") cmp = closeDateOf(a).localeCompare(closeDateOf(b));
+          else if (sortKey === "state") cmp = (a.state || "").localeCompare(b.state || "");
+          else if (sortKey === "payments") cmp = paymentCountOf(a) - paymentCountOf(b);
+          else if (sortKey === "vouchers") cmp = voucherCountOf(a).withVoucher - voucherCountOf(b).withVoucher;
+          else if (sortKey === "total") cmp = (a.total || 0) - (b.total || 0);
+          return sortDir === "desc" ? -cmp : cmp;
+        });
+
+        // Cabecera clickeable
+        const SortHeader = ({ id, label, align = "left" }) => {
+          if (!visibleCols[id]) return null;
+          const active = sortKey === id;
+          return (
+            <th
+              onClick={() => {
+                if (active) {
+                  setSortDir(d => d === "asc" ? "desc" : "asc");
+                } else {
+                  setSortKey(id);
+                  setSortDir("desc");
+                }
+              }}
+              className={`px-3 py-2.5 font-semibold cursor-pointer select-none hover:bg-stone-100 transition ${
+                align === "right" ? "text-right" : "text-left"
+              } ${active ? "text-stone-900" : "text-stone-500"}`}
+            >
+              <span className={`inline-flex items-center gap-1 ${align === "right" ? "flex-row-reverse" : ""}`}>
+                {label}
+                {active && (
+                  sortDir === "desc"
+                    ? <ChevronDown size={11} strokeWidth={2.5} />
+                    : <ChevronUp size={11} strokeWidth={2.5} />
+                )}
+              </span>
+            </th>
+          );
+        };
+
+        return (
+          <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-stone-50 border-b border-stone-200">
+                  <tr className="text-xs tracking-widest uppercase">
+                    <SortHeader id="number" label="Recibo" />
+                    <SortHeader id="client" label="Cliente" />
+                    <SortHeader id="date" label="Cerrada" />
+                    <SortHeader id="state" label="Estado" />
+                    <SortHeader id="payments" label="Pagos" />
+                    <SortHeader id="vouchers" label="Comprobantes" />
+                    <SortHeader id="total" label="Total" align="right" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-100">
+                  {tableData.map(inv => {
+                    const c = clientMap[inv.clientId];
+                    const stateInfo = INVOICE_STATES[inv.state];
+                    const plan = planByInvoice[inv.id];
+                    const closeDate = closeDateOf(inv) || "—";
+                    const paymentCount = paymentCountOf(inv);
+                    const initials = c ? c.name.split(" ").slice(0, 2).map(s => s[0]).join("").toUpperCase() : "??";
+                    return (
+                      <tr
+                        key={inv.id}
+                        onClick={() => onSelect(inv)}
+                        className="hover:bg-stone-50 cursor-pointer transition"
+                      >
+                        {visibleCols.number && (
+                          <td className="px-3 py-2.5 font-mono text-xs font-bold text-stone-800">{inv.number}</td>
+                        )}
+                        {visibleCols.client && (
+                          <td className="px-3 py-2.5">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div className={`w-6 h-6 rounded-md grid place-items-center text-white text-[9px] font-bold flex-shrink-0 ${
+                                c?.isOrg ? "bg-gradient-to-br from-stone-700 to-stone-900" : "bg-gradient-to-br from-orange-500 to-orange-700"
+                              }`}>
+                                {initials}
+                              </div>
+                              <span className="font-semibold text-stone-800 truncate text-xs">{c ? c.name : "—"}</span>
+                            </div>
+                          </td>
+                        )}
+                        {visibleCols.date && (
+                          <td className="px-3 py-2.5 text-xs text-stone-600 font-mono whitespace-nowrap">{closeDate}</td>
+                        )}
+                        {visibleCols.state && (
+                          <td className="px-3 py-2.5">
+                            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${stateInfo.badge}`}>
+                              {stateInfo.label}
+                            </span>
+                            {plan && (
+                              <span className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-700">
+                                <Calendar size={8} /> Plan
+                              </span>
+                            )}
+                          </td>
+                        )}
+                        {visibleCols.payments && (
+                          <td className="px-3 py-2.5 text-xs text-stone-600">
+                            {paymentCount} pago{paymentCount !== 1 ? "s" : ""}
+                          </td>
+                        )}
+                        {visibleCols.vouchers && (() => {
+                          // Recolectar los comprobantes (vouchers) registrados
+                          const plan = planByInvoice[inv.id];
+                          const sources = plan ? plan.installments.filter(i => i.paid) : (inv.payments || []);
+                          const withVoucher = sources.filter(s => s.voucher);
+                          if (sources.length === 0) {
+                            return <td className="px-3 py-2.5 text-xs text-stone-400 italic">—</td>;
+                          }
+                          if (withVoucher.length === 0) {
+                            return (
+                              <td className="px-3 py-2.5 text-xs text-stone-400 italic">
+                                Sin registrar
+                              </td>
+                            );
+                          }
+                          return (
+                            <td className="px-3 py-2.5">
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                {withVoucher.map((s, i) => (
+                                  <span
+                                    key={i}
+                                    title={`${s.method || "Pago"} · $${(s.amount || 0).toLocaleString()}`}
+                                    className="font-mono text-sm font-semibold text-stone-800"
+                                  >
+                                    {s.voucher}
+                                  </span>
+                                ))}
+                                {withVoucher.length < sources.length && (
+                                  <span
+                                    title={`Faltan ${sources.length - withVoucher.length} comprobante(s) por registrar`}
+                                    className="text-xs text-amber-600 italic"
+                                  >
+                                    +{sources.length - withVoucher.length} sin reg.
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                          );
+                        })()}
+                        {visibleCols.total && (
+                          <td className="px-3 py-2.5 text-right font-mono font-bold text-emerald-700 whitespace-nowrap">
+                            ${(inv.total ?? 0).toLocaleString()}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* === VISTA LISTA — Cards expandidas con desglose de pagos === */}
+      {viewMode === "list" && sorted.map(inv => {
         const c = clientMap[inv.clientId];
         const plan = planByInvoice[inv.id];
         const stateInfo = INVOICE_STATES[inv.state];
@@ -13552,7 +17231,7 @@ function SalesHistory({ invoices, clientMap, onSelect, paymentPlans = [] }) {
 
         return (
           <div key={inv.id} className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
-            {/* Header de la factura */}
+            {/* Header de la recibo */}
             <button
               onClick={() => onSelect(inv)}
               className="w-full p-4 border-b border-stone-200 flex items-center gap-3 flex-wrap hover:bg-stone-50 transition text-left"
@@ -13594,7 +17273,7 @@ function SalesHistory({ invoices, clientMap, onSelect, paymentPlans = [] }) {
             <div className="p-3 bg-stone-50">
               {items.length === 0 ? (
                 <div className="text-xs text-stone-500 italic text-center py-2">
-                  Esta factura no tiene pagos registrados.
+                  Esta recibo no tiene pagos registrados.
                 </div>
               ) : (
                 <>
@@ -13678,7 +17357,7 @@ function SalesDebtors({ invoices, clientMap, onSelect, onCreatePlan, plansByInvo
             ${totalDebt.toLocaleString()} <span className="text-sm font-normal">en deuda activa</span>
           </div>
           <div className="text-sm text-red-700 mt-1">
-            {invoices.length} factura{invoices.length !== 1 ? "s" : ""} sin saldo completo · {Object.keys(byClient).length} cliente{Object.keys(byClient).length !== 1 ? "s" : ""}
+            {invoices.length} recibo{invoices.length !== 1 ? "s" : ""} sin saldo completo · {Object.keys(byClient).length} cliente{Object.keys(byClient).length !== 1 ? "s" : ""}
           </div>
         </div>
       </div>
@@ -13687,7 +17366,7 @@ function SalesDebtors({ invoices, clientMap, onSelect, onCreatePlan, plansByInvo
         <div className="bg-white border border-stone-200 rounded-2xl p-12 text-center">
           <Check size={32} className="text-emerald-500 mx-auto mb-3" strokeWidth={2.5} />
           <div className="text-base font-semibold text-stone-700">¡No hay deudas!</div>
-          <div className="text-sm text-stone-500 mt-1">Todas las facturas están pagadas.</div>
+          <div className="text-sm text-stone-500 mt-1">Todas las recibos están pagadas.</div>
         </div>
       )}
 
@@ -13706,7 +17385,7 @@ function SalesDebtors({ invoices, clientMap, onSelect, onCreatePlan, plansByInvo
               <div className="flex-1 min-w-0">
                 <div className="font-semibold text-sm truncate">{c ? c.name : "Cliente desconocido"}</div>
                 <div className="text-xs text-stone-500">
-                  {list.length} factura{list.length !== 1 ? "s" : ""} pendiente{list.length !== 1 ? "s" : ""}
+                  {list.length} recibo{list.length !== 1 ? "s" : ""} pendiente{list.length !== 1 ? "s" : ""}
                 </div>
               </div>
               <div className="text-right">
@@ -13747,7 +17426,7 @@ function SalesDebtors({ invoices, clientMap, onSelect, onCreatePlan, plansByInvo
                       <button
                         onClick={() => onSelect(inv)}
                         className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white border border-stone-200 hover:border-orange-400 text-stone-700 hover:text-orange-700 text-xs font-semibold transition"
-                        title="Ver detalle de la factura"
+                        title="Ver detalle de la recibo"
                       >
                         <Eye size={11} /> Detalle
                       </button>
@@ -13760,7 +17439,7 @@ function SalesDebtors({ invoices, clientMap, onSelect, onCreatePlan, plansByInvo
                       <button
                         onClick={() => onCreatePlan(inv)}
                         disabled={Boolean(plansByInvoice[inv.id])}
-                        title={plansByInvoice[inv.id] ? "Esta factura ya tiene un plan activo. Elimínalo desde la pestaña Planes para crear uno nuevo." : "Crear plan de pago"}
+                        title={plansByInvoice[inv.id] ? "Esta recibo ya tiene un plan activo. Elimínalo desde la pestaña Planes para crear uno nuevo." : "Crear plan de pago"}
                         className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                           plansByInvoice[inv.id]
                             ? "bg-stone-100 border border-stone-200 text-stone-400 cursor-not-allowed"
@@ -13831,7 +17510,7 @@ function SalesPaymentPlans({ plans, invoices, clientMap, onPayInstallment, onDel
               <div className="flex-1 min-w-0">
                 <div className="font-semibold text-sm truncate">{c ? c.name : "—"}</div>
                 <div className="text-xs text-stone-500 font-mono">
-                  Factura {inv ? inv.number : "—"}
+                  Recibo {inv ? inv.number : "—"}
                 </div>
               </div>
               <div className="text-right">
@@ -13970,7 +17649,7 @@ function SalesPaymentPlans({ plans, invoices, clientMap, onPayInstallment, onDel
 
               <div className="p-5 space-y-3">
                 <div className="text-sm text-stone-700 leading-relaxed">
-                  Vas a eliminar el plan de pago de esta factura. Las cuotas pagadas seguirán contadas como abonos parciales, pero la deuda restante volverá a aparecer como saldo pendiente sin estructura de cuotas.
+                  Vas a eliminar el plan de pago de esta recibo. Las cuotas pagadas seguirán contadas como abonos parciales, pero la deuda restante volverá a aparecer como saldo pendiente sin estructura de cuotas.
                 </div>
 
                 <div className="bg-stone-50 border border-stone-200 rounded-xl p-3 space-y-1.5 text-xs">
@@ -14120,9 +17799,224 @@ function VoucherModal({ target, onClose, onConfirm }) {
   );
 }
 
-// ========== MODAL: Detalle de factura ==========
+// ========== MODAL: Detalle de recibo ==========
 
-function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan, onMessageClient, readOnly, setInvoices, paymentPlans = [], setPaymentPlans, onUpdateSelected }) {
+// === Catálogo de servicios para el InvoiceItemAdder ===
+const INVOICE_SERVICE_CATALOG = [
+  { id: "s-001", name: "Consulta general", price: 35, category: "Veterinaria" },
+  { id: "s-002", name: "Consulta de control", price: 25, category: "Veterinaria" },
+  { id: "s-003", name: "Vacuna polivalente DHPPi", price: 28, category: "Veterinaria" },
+  { id: "s-004", name: "Vacuna antirrábica", price: 22, category: "Veterinaria" },
+  { id: "s-005", name: "Vacuna triple felina", price: 30, category: "Veterinaria" },
+  { id: "s-006", name: "Desparasitación interna", price: 18, category: "Veterinaria" },
+  { id: "s-007", name: "Limpieza dental con anestesia", price: 95, category: "Veterinaria" },
+  { id: "s-008", name: "Examen de laboratorio", price: 65, category: "Laboratorio" },
+  { id: "s-009", name: "Ecografía abdominal", price: 80, category: "Veterinaria" },
+  { id: "s-010", name: "Esterilización canina", price: 150, category: "Cirugía" },
+  { id: "s-011", name: "Cirugía menor", price: 220, category: "Cirugía" },
+  { id: "s-012", name: "Baño básico", price: 25, category: "Grooming" },
+  { id: "s-013", name: "Baño + Corte completo", price: 45, category: "Grooming" },
+  { id: "s-014", name: "Corte de uñas", price: 12, category: "Grooming" },
+  { id: "s-015", name: "Spa completo", price: 65, category: "Grooming" },
+];
+
+// === Sub-component: añadir ítem a un recibo en borrador ===
+// Modal compacto con tabs (Servicio / Producto / Medicina / Personalizado)
+// + buscador de catálogo y entrada custom.
+function InvoiceItemAdder({ onAdd, onCancel }) {
+  const [mode, setMode] = useState("service"); // service | product | medicine | custom
+  const [search, setSearch] = useState("");
+  const [customDesc, setCustomDesc] = useState("");
+  const [customQty, setCustomQty] = useState("1");
+  const [customUnit, setCustomUnit] = useState("");
+
+  const catalog = useMemo(() => {
+    if (mode === "service") return INVOICE_SERVICE_CATALOG.map(s => ({
+      key: s.id, description: s.name, unit: s.price, category: s.category, type: "service",
+    }));
+    if (mode === "product") return PRODUCT_CATALOG.map(p => ({
+      key: p.id, description: p.name, unit: p.price, category: p.category, type: "product",
+    }));
+    if (mode === "medicine") return MEDICINE_CATALOG.map(m => ({
+      key: m.id, description: m.name, unit: m.price, category: m.indication, type: "medicine",
+      requiresRecipe: m.requiresRecipe, presentation: m.presentation,
+    }));
+    return [];
+  }, [mode]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return catalog;
+    return catalog.filter(it =>
+      it.description.toLowerCase().includes(q) ||
+      (it.category || "").toLowerCase().includes(q)
+    );
+  }, [catalog, search]);
+
+  const handlePick = (it) => {
+    onAdd({
+      description: it.description,
+      qty: 1,
+      unit: it.unit,
+      total: it.unit,
+      type: it.type,
+      requiresRecipe: it.requiresRecipe || false,
+    });
+  };
+
+  const handleAddCustom = () => {
+    const qty = Number(customQty) || 0;
+    const unit = Number(customUnit) || 0;
+    if (!customDesc.trim() || qty <= 0 || unit <= 0) return;
+    onAdd({
+      description: customDesc.trim(),
+      qty,
+      unit,
+      total: qty * unit,
+      type: "custom",
+    });
+  };
+
+  const TABS = [
+    { id: "service",  label: "Servicios",   Icon: Stethoscope,  color: "orange" },
+    { id: "product",  label: "Productos",   Icon: ShoppingBag,  color: "blue" },
+    { id: "medicine", label: "Medicinas",   Icon: Pill,         color: "purple" },
+    { id: "custom",   label: "Personalizado", Icon: Plus,        color: "stone" },
+  ];
+
+  return (
+    <div className="mt-2 pt-2 border-t border-stone-200 space-y-2">
+      {/* Tabs */}
+      <div className="grid grid-cols-4 gap-1">
+        {TABS.map(t => {
+          const Ic = t.Icon;
+          const active = mode === t.id;
+          const colorMap = {
+            orange: active ? "bg-orange-600 text-white" : "bg-stone-100 text-stone-600 hover:bg-stone-200",
+            blue:   active ? "bg-blue-600 text-white"   : "bg-stone-100 text-stone-600 hover:bg-stone-200",
+            purple: active ? "bg-purple-600 text-white" : "bg-stone-100 text-stone-600 hover:bg-stone-200",
+            stone:  active ? "bg-stone-700 text-white"  : "bg-stone-100 text-stone-600 hover:bg-stone-200",
+          };
+          return (
+            <button
+              key={t.id}
+              onClick={() => { setMode(t.id); setSearch(""); }}
+              className={`flex flex-col items-center gap-0.5 py-1.5 rounded text-[10px] font-semibold transition ${colorMap[t.color]}`}
+            >
+              <Ic size={12} />
+              <span>{t.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Custom mode */}
+      {mode === "custom" ? (
+        <div className="space-y-1.5">
+          <input
+            value={customDesc}
+            onChange={(e) => setCustomDesc(e.target.value)}
+            placeholder="Descripción del ítem"
+            autoFocus
+            className="w-full px-2 py-1.5 bg-stone-50 border border-stone-200 rounded text-xs outline-none focus:border-orange-500 focus:bg-white"
+          />
+          <div className="flex items-center gap-1.5 text-xs">
+            <input
+              type="number"
+              min="1"
+              value={customQty}
+              onChange={(e) => setCustomQty(e.target.value)}
+              placeholder="Cant."
+              className="w-14 px-1.5 py-1.5 bg-stone-50 border border-stone-200 rounded text-center font-mono outline-none focus:border-orange-500 focus:bg-white"
+            />
+            <span className="text-stone-400">×</span>
+            <span className="text-stone-400">$</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={customUnit}
+              onChange={(e) => setCustomUnit(e.target.value)}
+              placeholder="Precio"
+              className="flex-1 min-w-0 px-1.5 py-1.5 bg-stone-50 border border-stone-200 rounded text-right font-mono outline-none focus:border-orange-500 focus:bg-white"
+            />
+          </div>
+          <div className="flex gap-1.5">
+            <button
+              onClick={onCancel}
+              className="flex-1 px-2 py-1.5 rounded text-xs font-semibold bg-white border border-stone-200 text-stone-600 hover:border-stone-400"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleAddCustom}
+              disabled={!customDesc.trim() || Number(customQty) <= 0 || Number(customUnit) <= 0}
+              className="flex-1 px-2 py-1.5 rounded text-xs font-semibold bg-orange-600 hover:bg-orange-700 text-white disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed"
+            >
+              Agregar
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Buscador catálogo */}
+          <div className="relative">
+            <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-stone-400" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar en el catálogo..."
+              autoFocus
+              className="w-full pl-7 pr-2 py-1.5 bg-stone-50 border border-stone-200 rounded text-xs outline-none focus:border-orange-500 focus:bg-white"
+            />
+          </div>
+          {/* Resultados */}
+          <div className="max-h-56 overflow-y-auto space-y-1 -mx-1 px-1">
+            {filtered.length === 0 ? (
+              <div className="text-center py-4 text-xs text-stone-400 italic">
+                Sin resultados
+              </div>
+            ) : (
+              filtered.slice(0, 20).map(it => (
+                <button
+                  key={it.key}
+                  onClick={() => handlePick(it)}
+                  className="w-full flex items-center justify-between gap-2 p-2 rounded-lg bg-white border border-stone-200 hover:border-orange-400 hover:bg-orange-50 transition text-left group"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold text-stone-800 truncate flex items-center gap-1">
+                      {it.description}
+                      {it.requiresRecipe && (
+                        <span className="inline-flex items-center px-1 py-px rounded bg-purple-100 text-purple-700 text-[8px] font-bold uppercase">
+                          Recipe
+                        </span>
+                      )}
+                    </div>
+                    {it.category && <div className="text-[10px] text-stone-500 truncate">{it.category}</div>}
+                  </div>
+                  <span className="text-xs font-mono font-bold text-orange-700 whitespace-nowrap">
+                    ${it.unit.toFixed(2)}
+                  </span>
+                  <Plus size={11} className="text-stone-300 group-hover:text-orange-600 flex-shrink-0" />
+                </button>
+              ))
+            )}
+          </div>
+          <button
+            onClick={onCancel}
+            className="w-full px-2 py-1 rounded text-xs font-semibold bg-white border border-stone-200 text-stone-600 hover:border-stone-400"
+          >
+            Cancelar
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function InvoiceDetailModal({ invoice, client, invoices = [], onClose, onPayment, onCreatePlan, onMessageClient, readOnly, setInvoices, paymentPlans = [], setPaymentPlans, onUpdateSelected }) {
+  const [showHistory, setShowHistory] = useState(false);
+  const [viewingRecipe, setViewingRecipe] = useState(null); // item con recipe a ver en detalle
   const stateInfo = INVOICE_STATES[invoice.state];
   const isDraft = invoice.state === "borrador";
   // Solo se permite editar items si está en borrador
@@ -14134,7 +18028,7 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
   const [newItemQty, setNewItemQty] = useState("1");
   const [newItemUnit, setNewItemUnit] = useState("");
 
-  // ¿La factura ya tiene un plan asociado? (activo o completado, no eliminados)
+  // ¿La recibo ya tiene un plan asociado? (activo o completado, no eliminados)
   const activePlan = paymentPlans.find(p => p.invoiceId === invoice.id && p.status !== "deleted");
   // Plan completado: status explícito o todas las cuotas pagadas (compatibilidad con seed/legacy)
   const planIsCompleted = activePlan && (
@@ -14206,7 +18100,7 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
     setShowAddItem(false);
   };
 
-  // Emitir factura: pasar de borrador a emitido (queda inmutable)
+  // Emitir recibo: pasar de borrador a emitido (queda inmutable)
   const emit = () => {
     setInvoices(prev => prev.map(inv => {
       if (inv.id !== invoice.id) return inv;
@@ -14239,8 +18133,14 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
         className="fixed inset-0 bg-stone-900 z-40 sm:hidden"
       />
 
-      {/* Drawer lateral derecho 30% en escritorio, fullscreen en mobile */}
-      <aside className="fixed top-0 right-0 bottom-0 w-full sm:w-96 bg-stone-50 z-50 shadow-2xl flex flex-col border-l border-stone-200">
+      {/* Drawer lateral derecho. Ancho objetivo ~30% del viewport en pantallas
+          amplias, con un mínimo legible para que en ventanas angostas (p.ej. el
+          navegador a media pantalla) no ocupe todo el ancho. Se usa min()/max()
+          de CSS para acotar el rango sin depender del breakpoint `sm`. */}
+      <aside
+        className="fixed top-0 right-0 bottom-0 bg-stone-50 z-50 shadow-2xl flex flex-col border-l border-stone-200"
+        style={{ width: "min(92vw, max(30vw, 380px))" }}
+      >
         {/* Header */}
         <div className="bg-white border-b border-stone-200 flex-shrink-0">
           <div className="p-4 flex items-center gap-3">
@@ -14255,7 +18155,7 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold flex items-center gap-2">
-                Factura
+                Recibo
                 {readOnly && <span className="text-stone-400 font-normal">· Solo lectura</span>}
               </div>
               <div className="font-serif text-base font-semibold mt-0.5 font-mono leading-tight">
@@ -14282,7 +18182,81 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
                 <div className="font-semibold text-sm truncate">{client ? client.name : "—"}</div>
                 <div className="text-xs text-stone-500 font-mono truncate">{client ? client.cedula : ""}</div>
               </div>
+              {/* Botón de historial del cliente */}
+              {client && (
+                <button
+                  onClick={() => setShowHistory(!showHistory)}
+                  title="Ver historial de servicios del cliente"
+                  className={`w-8 h-8 rounded-lg grid place-items-center transition flex-shrink-0 ${
+                    showHistory
+                      ? "bg-orange-600 text-white"
+                      : "bg-stone-100 hover:bg-orange-100 text-stone-500 hover:text-orange-700"
+                  }`}
+                >
+                  <Search size={13} />
+                </button>
+              )}
             </div>
+
+            {/* Panel de historial de servicios del cliente */}
+            {showHistory && client && (() => {
+              const clientInvoices = invoices
+                .filter(inv => inv.clientId === client.id && inv.id !== invoice.id)
+                .sort((a, b) => (b.issueDate || "").localeCompare(a.issueDate || ""));
+              const allItems = clientInvoices.flatMap(inv =>
+                (inv.items || []).map(it => ({ ...it, invoiceNumber: inv.number, invoiceDate: inv.issueDate, invoiceState: inv.state }))
+              );
+              return (
+                <div className="mt-3 border-t border-stone-100 pt-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-xs font-bold text-stone-700 tracking-wide uppercase flex items-center gap-1.5">
+                      <FileText size={11} /> Historial de servicios
+                    </div>
+                    <span className="text-[10px] font-bold px-1.5 py-px rounded-full bg-orange-100 text-orange-700">
+                      {clientInvoices.length} recibo{clientInvoices.length !== 1 ? "s" : ""}
+                    </span>
+                  </div>
+                  {clientInvoices.length === 0 ? (
+                    <div className="text-xs text-stone-400 italic py-2 text-center">
+                      Esta es la primera recibo del cliente.
+                    </div>
+                  ) : (
+                    <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                      {clientInvoices.map(inv => (
+                        <div key={inv.id} className="bg-stone-50 rounded-lg p-2 border border-stone-100">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-mono font-bold text-stone-700">{inv.number}</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[10px] text-stone-400">{inv.issueDate}</span>
+                              <InvoiceStateBadge state={inv.state} />
+                            </div>
+                          </div>
+                          <div className="space-y-0.5">
+                            {(inv.items || []).map((it, i) => (
+                              <div key={i} className="flex items-center justify-between text-xs">
+                                <span className="text-stone-600 truncate flex-1 min-w-0">{it.description}</span>
+                                <span className="text-stone-700 font-semibold flex-shrink-0 ml-2">${(it.total || 0).toFixed(0)}</span>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="text-right text-xs font-bold text-orange-700 mt-1">
+                            Total: ${(inv.total || 0).toFixed(2)}
+                          </div>
+                        </div>
+                      ))}
+                      {/* Resumen */}
+                      <div className="bg-orange-50 border border-orange-200 rounded-lg p-2 text-center">
+                        <div className="text-xs text-orange-800">
+                          <span className="font-bold">{allItems.length}</span> servicio{allItems.length !== 1 ? "s" : ""} en{" "}
+                          <span className="font-bold">{clientInvoices.length}</span> recibo{clientInvoices.length !== 1 ? "s" : ""} ·{" "}
+                          Histórico: <span className="font-bold">${clientInvoices.reduce((s, inv) => s + (inv.total || 0), 0).toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
           <div className="bg-white border border-stone-200 rounded-xl p-3">
@@ -14304,7 +18278,7 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
             </div>
           </div>
 
-          {/* Banner: factura modificada por propuesta aprobada */}
+          {/* Banner: recibo modificada por propuesta aprobada */}
           {invoice.modifiedByProposal && (
             <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-3 flex items-start gap-2.5">
               <div className="w-8 h-8 rounded-lg bg-emerald-500 text-white grid place-items-center flex-shrink-0">
@@ -14321,7 +18295,7 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
             </div>
           )}
 
-          {/* Banner: factura creada desde propuesta */}
+          {/* Banner: recibo creada desde propuesta */}
           {invoice.fromProposal && !invoice.modifiedByProposal && (
             <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-3 flex items-start gap-2.5">
               <div className="w-8 h-8 rounded-lg bg-emerald-500 text-white grid place-items-center flex-shrink-0">
@@ -14332,7 +18306,7 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
                   Generada desde Grooming
                 </div>
                 <div className="text-xs text-emerald-900 mt-0.5 leading-relaxed">
-                  Esta factura fue aprobada a partir de una propuesta del módulo de grooming.
+                  Esta recibo fue aprobada a partir de una propuesta del módulo de grooming.
                 </div>
               </div>
             </div>
@@ -14389,16 +18363,80 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
                           ${(it.total ?? 0).toLocaleString()}
                         </span>
                       </div>
+                      {/* Recipe attached (visible aún en modo edición) */}
+                      {(it.recipe || it.recipePhoto || it.requiresRecipe) && (
+                        <div className="bg-purple-50 border border-purple-200 rounded p-1.5 flex items-center gap-1.5">
+                          <FileText size={10} className="text-purple-700 flex-shrink-0" />
+                          <span className="text-[10px] font-bold text-purple-700 uppercase tracking-wider">Recipe</span>
+                          {it.recipe?.medication && (
+                            <span className="text-[10px] text-purple-900 truncate flex-1">
+                              {it.recipe.medication}
+                              {it.recipe.dose && ` · ${it.recipe.dose}`}
+                            </span>
+                          )}
+                          <button
+                            onClick={() => setViewingRecipe(it)}
+                            title="Ver recipe completo"
+                            className="w-5 h-5 rounded bg-purple-100 hover:bg-purple-200 text-purple-700 grid place-items-center transition flex-shrink-0"
+                          >
+                            <Search size={9} />
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ) : (
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-semibold text-xs text-stone-800 leading-tight">{it.description}</div>
-                        <div className="text-xs text-stone-500 mt-0.5">{it.qty} × ${(it.unit ?? 0).toLocaleString()}</div>
+                    <div>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-xs text-stone-800 leading-tight">{it.description}</div>
+                          <div className="text-xs text-stone-500 mt-0.5">{it.qty} × ${(it.unit ?? 0).toLocaleString()}</div>
+                        </div>
+                        <span className="font-mono font-bold text-xs whitespace-nowrap">
+                          ${(it.total ?? 0).toLocaleString()}
+                        </span>
                       </div>
-                      <span className="font-mono font-bold text-xs whitespace-nowrap">
-                        ${(it.total ?? 0).toLocaleString()}
-                      </span>
+                      {/* Recipe adjunto al ítem (si es medicina con receta) */}
+                      {(it.recipe || it.recipePhoto) && (
+                        <div className="mt-1.5 bg-purple-50 border border-purple-200 rounded-lg p-2">
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="text-[9px] tracking-widest uppercase text-purple-700 font-bold flex items-center gap-1">
+                              <FileText size={9} /> Recipe adjunto
+                              {it.requiresRecipe && <span className="text-red-600">(Requerido)</span>}
+                            </div>
+                            {/* Lupa para ver recipe en detalle */}
+                            <button
+                              onClick={() => setViewingRecipe(it)}
+                              title="Ver recipe completo"
+                              className="w-6 h-6 rounded-md bg-purple-100 hover:bg-purple-200 text-purple-700 grid place-items-center transition"
+                            >
+                              <Search size={11} />
+                            </button>
+                          </div>
+                          {it.recipe && (
+                            <div className="text-[11px] text-purple-900 space-y-0.5">
+                              {it.recipe.medication && <div className="font-semibold">{it.recipe.medication}</div>}
+                              <div className="text-purple-700">
+                                {[it.recipe.dose, it.recipe.route, it.recipe.frequency, it.recipe.duration].filter(Boolean).join(" · ")}
+                              </div>
+                              {it.recipe.instructions && <div className="text-stone-600 italic">{it.recipe.instructions}</div>}
+                            </div>
+                          )}
+                          {it.recipePhoto && (
+                            <img
+                              src={it.recipePhoto}
+                              alt="Recipe"
+                              onClick={() => setViewingRecipe(it)}
+                              className="mt-1.5 w-full h-20 object-cover rounded border border-purple-200 cursor-pointer hover:opacity-90 transition"
+                            />
+                          )}
+                        </div>
+                      )}
+                      {/* Indicador si requiere recipe pero no tiene */}
+                      {it.requiresRecipe && !it.recipe && !it.recipePhoto && (
+                        <div className="mt-1 flex items-center gap-1 text-[10px] text-red-600 font-semibold">
+                          <AlertCircle size={10} /> Recipe requerido — sin adjuntar
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -14409,51 +18447,21 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
             {canEdit && (
               <>
                 {showAddItem ? (
-                  <div className="mt-2 pt-2 border-t border-stone-200 space-y-1.5">
-                    <input
-                      value={newItemDesc}
-                      onChange={(e) => setNewItemDesc(e.target.value)}
-                      placeholder="Descripción del ítem"
-                      autoFocus
-                      className="w-full px-2 py-1 bg-stone-50 border border-stone-200 rounded text-xs outline-none focus:border-orange-500 focus:bg-white"
-                    />
-                    <div className="flex items-center gap-1.5 text-xs">
-                      <input
-                        type="number"
-                        min="1"
-                        value={newItemQty}
-                        onChange={(e) => setNewItemQty(e.target.value)}
-                        placeholder="Cant."
-                        className="w-14 px-1.5 py-1 bg-stone-50 border border-stone-200 rounded text-center font-mono outline-none focus:border-orange-500 focus:bg-white"
-                      />
-                      <span className="text-stone-400">×</span>
-                      <span className="text-stone-400">$</span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={newItemUnit}
-                        onChange={(e) => setNewItemUnit(e.target.value)}
-                        placeholder="Precio"
-                        className="flex-1 min-w-0 px-1.5 py-1 bg-stone-50 border border-stone-200 rounded text-right font-mono outline-none focus:border-orange-500 focus:bg-white"
-                      />
-                    </div>
-                    <div className="flex gap-1.5">
-                      <button
-                        onClick={() => { setShowAddItem(false); setNewItemDesc(""); setNewItemQty("1"); setNewItemUnit(""); }}
-                        className="flex-1 px-2 py-1 rounded text-xs font-semibold bg-white border border-stone-200 text-stone-600 hover:border-stone-400"
-                      >
-                        Cancelar
-                      </button>
-                      <button
-                        onClick={addItem}
-                        disabled={!newItemDesc.trim() || Number(newItemQty) <= 0 || Number(newItemUnit) <= 0}
-                        className="flex-1 px-2 py-1 rounded text-xs font-semibold bg-orange-600 hover:bg-orange-700 text-white disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed"
-                      >
-                        Agregar
-                      </button>
-                    </div>
-                  </div>
+                  <InvoiceItemAdder
+                    onAdd={(item) => {
+                      setInvoices(prev => prev.map(inv => {
+                        if (inv.id !== invoice.id) return inv;
+                        const items = [...inv.items, item];
+                        const r = recalc(items);
+                        const newBalance = r.total - inv.paid;
+                        const updated = { ...inv, ...r, balance: newBalance };
+                        onUpdateSelected?.(updated);
+                        return updated;
+                      }));
+                      setShowAddItem(false);
+                    }}
+                    onCancel={() => setShowAddItem(false)}
+                  />
                 ) : (
                   <button
                     onClick={() => setShowAddItem(true)}
@@ -14474,12 +18482,126 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
                 <span>IVA 16%</span>
                 <span className="font-mono">${(invoice.tax ?? 0).toLocaleString()}</span>
               </div>
+              {/* Delivery cost line */}
+              {invoice.delivery?.cost > 0 && (
+                <div className="flex justify-between text-xs text-cyan-700">
+                  <span className="flex items-center gap-1"><Truck size={10} /> Delivery</span>
+                  <span className="font-mono">${invoice.delivery.cost.toLocaleString()}</span>
+                </div>
+              )}
               <div className="flex justify-between font-bold text-stone-900 pt-1 border-t border-stone-200">
                 <span>Total</span>
                 <span className="font-mono text-base text-orange-700">${(invoice.total ?? 0).toLocaleString()}</span>
               </div>
             </div>
           </div>
+
+          {/* === Delivery tracker === */}
+          {invoice.delivery && (
+            <div className="bg-white border border-cyan-200 rounded-xl p-3 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="text-xs tracking-widest uppercase text-cyan-700 font-bold flex items-center gap-1.5">
+                  <Truck size={12} /> Seguimiento de delivery
+                </div>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                  invoice.delivery.mode === "paid" ? "bg-cyan-100 text-cyan-700" : "bg-emerald-100 text-emerald-700"
+                }`}>
+                  {invoice.delivery.mode === "paid" ? `Envío $${invoice.delivery.cost}` : "Envío sin costo"}
+                </span>
+              </div>
+
+              {/* Progress bar visual */}
+              {(() => {
+                const STAGES = [
+                  { id: "preparando", label: "Preparando", icon: Package, color: "amber" },
+                  { id: "en-camino",  label: "En camino",  icon: Truck,   color: "blue" },
+                  { id: "entregado",  label: "Entregado",  icon: CheckCircle, color: "emerald" },
+                ];
+                const currentIdx = STAGES.findIndex(s => s.id === invoice.delivery.status);
+                return (
+                  <div className="space-y-2">
+                    {/* Stage dots */}
+                    <div className="flex items-center gap-0">
+                      {STAGES.map((stage, i) => {
+                        const Ic = stage.icon;
+                        const reached = i <= currentIdx;
+                        const isCurrent = i === currentIdx;
+                        const isLast = i === STAGES.length - 1;
+                        return (
+                          <React.Fragment key={stage.id}>
+                            <button
+                              onClick={() => {
+                                if (!setInvoices) return;
+                                const now = new Date().toISOString().slice(0, 10);
+                                const oldTimeline = invoice.delivery?.timeline || [];
+                                const newTimeline = [...oldTimeline];
+                                if (i > currentIdx) {
+                                  for (let s = currentIdx + 1; s <= i; s++) {
+                                    if (!newTimeline.find(t => t.status === STAGES[s].id)) {
+                                      newTimeline.push({ status: STAGES[s].id, date: now, by: "Operador" });
+                                    }
+                                  }
+                                }
+                                const updatedDelivery = { ...invoice.delivery, status: stage.id, timeline: newTimeline };
+                                setInvoices(prev => prev.map(inv =>
+                                  inv.id === invoice.id ? { ...inv, delivery: updatedDelivery } : inv
+                                ));
+                                if (onUpdateSelected) onUpdateSelected({ delivery: updatedDelivery });
+                              }}
+                              title={`Marcar como "${stage.label}"`}
+                              className={`w-9 h-9 rounded-full grid place-items-center flex-shrink-0 transition border-2 ${
+                                isCurrent
+                                  ? stage.color === "amber"
+                                    ? "bg-amber-500 border-amber-500 text-white"
+                                    : stage.color === "blue"
+                                      ? "bg-blue-500 border-blue-500 text-white"
+                                      : "bg-emerald-500 border-emerald-500 text-white"
+                                  : reached
+                                    ? "bg-emerald-100 border-emerald-300 text-emerald-600"
+                                    : "bg-stone-100 border-stone-200 text-stone-400 hover:border-cyan-300 hover:text-cyan-600 cursor-pointer"
+                              }`}
+                            >
+                              <Ic size={14} />
+                            </button>
+                            {!isLast && (
+                              <div className={`flex-1 h-1 rounded-full mx-1 ${
+                                i < currentIdx ? "bg-emerald-400" : "bg-stone-200"
+                              }`} />
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                    </div>
+                    {/* Labels */}
+                    <div className="flex justify-between text-[10px]">
+                      {STAGES.map((stage, i) => (
+                        <span key={stage.id} className={`font-semibold ${
+                          i <= currentIdx ? "text-stone-700" : "text-stone-400"
+                        }`}>
+                          {stage.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Timeline */}
+              {invoice.delivery.timeline?.length > 0 && (
+                <div className="border-t border-cyan-100 pt-2 space-y-1">
+                  {invoice.delivery.timeline.map((t, i) => (
+                    <div key={i} className="flex items-center justify-between text-[11px]">
+                      <span className="text-stone-700 capitalize">
+                        <span className="font-semibold">{t.status.replace("-", " ")}</span>
+                        {t.by && <span className="text-stone-400"> · {t.by}</span>}
+                      </span>
+                      <span className="text-stone-400">{t.date}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Plan de pago asociado (activo o completado) */}
           {activePlan && (
@@ -14605,9 +18727,9 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
                   ? "bg-stone-200 text-stone-400 cursor-not-allowed"
                   : "bg-orange-600 hover:bg-orange-700 text-white"
               }`}
-              title="Emitir factura: pasa a estado emitido y ya no se podrá editar"
+              title="Emitir recibo: pasa a estado emitido y ya no se podrá editar"
             >
-              <Send size={14} strokeWidth={2.2} /> Emitir factura
+              <Send size={14} strokeWidth={2.2} /> Emitir recibo
             </button>
           )}
 
@@ -14635,7 +18757,7 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
           {isFinalized && (
             <div className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold bg-stone-100 text-stone-600 border border-stone-200">
               <Lock size={13} />
-              <span>Factura finalizada{invoice.finalizedAt ? ` el ${invoice.finalizedAt}` : ""}</span>
+              <span>Recibo finalizada{invoice.finalizedAt ? ` el ${invoice.finalizedAt}` : ""}</span>
             </div>
           )}
 
@@ -14649,7 +18771,7 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
                     ? "bg-stone-100 border border-stone-200 text-stone-400 cursor-not-allowed"
                     : "bg-white border border-orange-300 text-orange-700 hover:bg-orange-50"
                 }`}
-                title={activePlan ? "Esta factura ya tiene un plan activo. Elimínalo primero." : "Crear plan de pago"}
+                title={activePlan ? "Esta recibo ya tiene un plan activo. Elimínalo primero." : "Crear plan de pago"}
               >
                 <Calendar size={11} /> {activePlan ? "Con plan" : "Plan"}
               </button>
@@ -14668,6 +18790,113 @@ function InvoiceDetailModal({ invoice, client, onClose, onPayment, onCreatePlan,
           </div>
         </div>
       </aside>
+
+      {/* === Visor de recipe completo === */}
+      {viewingRecipe && (
+        <div onClick={() => setViewingRecipe(null)} className="fixed inset-0 bg-stone-900/80 z-[60] flex justify-center items-center p-4">
+          <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+            {/* Header */}
+            <div className="p-4 bg-gradient-to-r from-purple-500 to-purple-600 text-white flex items-center gap-3 flex-shrink-0">
+              <div className="w-10 h-10 rounded-xl bg-white/20 grid place-items-center flex-shrink-0">
+                <FileText size={18} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[10px] tracking-widest uppercase opacity-80 font-semibold">Recipe médico</div>
+                <h3 className="font-serif text-lg font-semibold truncate">
+                  {viewingRecipe.recipe?.medication || viewingRecipe.description}
+                </h3>
+              </div>
+              <button onClick={() => setViewingRecipe(null)} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 grid place-items-center transition">
+                <X size={14} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {/* Datos del medicamento */}
+              <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 space-y-2">
+                <div className="text-xs tracking-widest uppercase text-purple-700 font-bold">Prescripción</div>
+                {viewingRecipe.recipe ? (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <div className="text-[10px] text-purple-500 font-semibold uppercase">Medicamento</div>
+                        <div className="text-sm font-bold text-purple-900">{viewingRecipe.recipe.medication || "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-purple-500 font-semibold uppercase">Dosis</div>
+                        <div className="text-sm font-semibold text-stone-800">{viewingRecipe.recipe.dose || "—"}</div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <div className="text-[10px] text-purple-500 font-semibold uppercase">Vía</div>
+                        <div className="text-sm text-stone-800">{viewingRecipe.recipe.route || "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-purple-500 font-semibold uppercase">Frecuencia</div>
+                        <div className="text-sm text-stone-800">{viewingRecipe.recipe.frequency || "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-purple-500 font-semibold uppercase">Duración</div>
+                        <div className="text-sm text-stone-800">{viewingRecipe.recipe.duration || "—"}</div>
+                      </div>
+                    </div>
+                    {viewingRecipe.recipe.instructions && (
+                      <div className="bg-white border border-purple-100 rounded-lg p-2.5">
+                        <div className="text-[10px] text-purple-500 font-semibold uppercase mb-0.5">Indicaciones para el tutor</div>
+                        <div className="text-sm text-stone-800 leading-relaxed">{viewingRecipe.recipe.instructions}</div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-xs text-stone-500 italic">Sin datos de prescripción registrados.</div>
+                )}
+              </div>
+
+              {/* Datos de la recibo */}
+              <div className="bg-stone-50 border border-stone-200 rounded-xl p-3">
+                <div className="text-xs tracking-widest uppercase text-stone-500 font-bold mb-1">Recibodo en</div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-mono font-bold text-stone-700">{invoice.number}</span>
+                  <span className="text-stone-500">{invoice.issueDate}</span>
+                </div>
+                <div className="text-xs text-stone-500 mt-0.5">{client?.name || "—"}</div>
+              </div>
+
+              {/* Foto del recipe */}
+              <div className="bg-stone-50 border border-stone-200 rounded-xl p-3">
+                <div className="text-xs tracking-widest uppercase text-stone-500 font-bold mb-2">Foto del recipe</div>
+                {viewingRecipe.recipePhoto ? (
+                  <img
+                    src={viewingRecipe.recipePhoto}
+                    alt="Recipe"
+                    className="w-full rounded-lg border border-stone-200 shadow-sm"
+                  />
+                ) : (
+                  <div className="bg-white border-2 border-dashed border-stone-200 rounded-xl p-6 text-center">
+                    <Camera size={24} className="text-stone-300 mx-auto mb-2" />
+                    <div className="text-sm font-semibold text-stone-500">Sin foto adjunta</div>
+                    <div className="text-xs text-stone-400 mt-0.5">
+                      La foto del recipe se puede adjuntar desde Nueva Venta al momento de cobrar.
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-3 border-t border-stone-200 bg-stone-50 flex-shrink-0">
+              <button
+                onClick={() => setViewingRecipe(null)}
+                className="w-full px-3 py-2.5 rounded-xl text-sm font-semibold bg-purple-600 hover:bg-purple-700 text-white transition"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -14793,7 +19022,7 @@ function PaymentModal({ invoice, client, onClose, onSubmit }) {
               )}
               <div>
                 {isFullPayment
-                  ? <>Este abono <strong>salda totalmente</strong> la factura. Pasará a estado <strong>Pagado</strong>.</>
+                  ? <>Este abono <strong>salda totalmente</strong> la recibo. Pasará a estado <strong>Pagado</strong>.</>
                   : <>Saldo restante después del abono: <strong>${(invoice.balance - amount).toLocaleString()}</strong></>
                 }
               </div>
@@ -15002,9 +19231,26 @@ function buildInitialAgendaEvents() {
     { id: "p3", type: "pet", date: offset(10), time: "09:00", duration: 15, pet: "Rocky", petCode: "871522", species: "dog", owner: "Ana García", professional: "Sistema", title: "Recordatorio: control de peso", reason: "Plan de pérdida de peso: pesar mensualmente.", status: "automatico" },
     { id: "v10", type: "vet", date: offset(12), time: "14:00", duration: 30, pet: "Mishi", petCode: "178805", species: "cat", breed: "Persa", owner: "Elena V.", professional: "Dr. Henríquez", title: "Retiro de puntos", reason: "Retiro de puntos post-esterilización.", room: "Consultorio 2", status: "confirmada", price: 25 },
     { id: "b4", type: "b2b", date: offset(15), time: "15:00", duration: 90, owner: "Pet Hotel Caracas", professional: "Carlos M.", title: "Acuerdo de servicios externos", reason: "Convenio para hospedaje de clientes Premium.", room: "Sala de juntas", status: "confirmada", contact: "Sra. Mariana López · 0212-444-5566" },
+
+    // === EVENTOS PET 2 ===
+    // Tutores de la sede Pet 2 (según seed CLIENTS_DATA con sedeOrigenId="sede-pet2"):
+    // Lucía Hernández, Verónica Castro, Fernando Ruiz, Patricia Gómez,
+    // Roberto Salazar, Carmen Linares
+    { id: "v-p2-1", type: "vet", date: offset(0), time: "09:00", duration: 30, pet: "Bella", petCode: "—", species: "dog", breed: "Schnauzer", owner: "Lucía Hernández", professional: "Dr. Salazar", title: "Consulta general", reason: "Chequeo de rutina.", room: "Consultorio Pet 2", status: "confirmada", price: 38, moduleId: "vet-pet2", sedeId: "sede-pet2" },
+    { id: "v-p2-2", type: "vet", date: offset(0), time: "11:30", duration: 45, pet: "Simba", petCode: "—", species: "cat", breed: "Maine Coon", owner: "Verónica Castro", professional: "Dr. Salazar", title: "Vacuna triple felina", reason: "Refuerzo anual.", room: "Sala de vacunación Pet 2", status: "confirmada", price: 45, moduleId: "vet-pet2", sedeId: "sede-pet2" },
+    { id: "v-p2-3", type: "vet", date: offset(0), time: "15:00", duration: 60, pet: "Rocco", petCode: "—", species: "dog", breed: "Pug", owner: "Fernando Ruiz", professional: null, title: "Limpieza dental", reason: "Profilaxis bajo sedación leve.", room: "Quirófano Pet 2", status: "pendiente_asignar", price: 105, moduleId: "vet-pet2", sedeId: "sede-pet2" },
+    { id: "g-p2-1", type: "grooming", date: offset(0), time: "10:00", duration: 75, pet: "Rocco", petCode: "—", species: "dog", breed: "Pug", owner: "Fernando Ruiz", professional: "Marta R.", title: "Spa completo", reason: "Servicio premium con aromaterapia.", room: "Sala Grooming Pet 2", status: "confirmada", price: 72, moduleId: "grooming-pet2", sedeId: "sede-pet2" },
+    { id: "g-p2-2", type: "grooming", date: offset(0), time: "13:00", duration: 40, pet: "Thor", petCode: "—", species: "dog", breed: "Husky", owner: "Roberto Salazar", professional: "Marta R.", title: "Baño básico", reason: "Limpieza post-paseo.", room: "Sala Grooming Pet 2", status: "confirmada", price: 28, moduleId: "grooming-pet2", sedeId: "sede-pet2" },
+    // Mañana
+    { id: "v-p2-4", type: "vet", date: offset(1), time: "10:30", duration: 30, pet: "Mia", petCode: "—", species: "cat", breed: "Británico", owner: "Carmen Linares", professional: "Dr. Salazar", title: "Consulta de control", reason: "Seguimiento tratamiento renal.", room: "Consultorio Pet 2", status: "confirmada", price: 28, moduleId: "vet-pet2", sedeId: "sede-pet2" },
+    { id: "g-p2-3", type: "grooming", date: offset(1), time: "12:00", duration: 30, pet: "Lola", petCode: "—", species: "rabbit", breed: "Holland Lop", owner: "Patricia Gómez", professional: "Marta R.", title: "Corte de uñas", reason: "Mantenimiento mensual.", room: "Sala Grooming Pet 2", status: "confirmada", price: 13, moduleId: "grooming-pet2", sedeId: "sede-pet2" },
+    // 2-4 días
+    { id: "v-p2-5", type: "vet", date: offset(2), time: "09:30", duration: 30, pet: "Bella", petCode: "—", species: "dog", breed: "Schnauzer", owner: "Lucía Hernández", professional: "Dr. Salazar", title: "Desparasitación", reason: "Trimestral.", room: "Consultorio Pet 2", status: "confirmada", price: 20, moduleId: "vet-pet2", sedeId: "sede-pet2" },
+    { id: "g-p2-4", type: "grooming", date: offset(3), time: "11:00", duration: 60, pet: "Simba", petCode: "—", species: "cat", breed: "Maine Coon", owner: "Verónica Castro", professional: "Marta R.", title: "Cepillado profundo", reason: "Pelaje denso, sesión semanal.", room: "Sala Grooming Pet 2", status: "confirmada", price: 31, moduleId: "grooming-pet2", sedeId: "sede-pet2" },
+    { id: "p-p2-1", type: "pet", date: offset(4), time: "09:00", duration: 15, pet: "Rocco", petCode: "—", species: "dog", owner: "Fernando Ruiz", professional: "Sistema", title: "Recordatorio: control post-tratamiento dental", reason: "Revisar cicatrización 1 semana después de limpieza.", status: "automatico", sedeId: "sede-pet2" },
   ].map(e => ({
-    // Etiquetar cada evento seed con la instancia base correspondiente.
-    // Eventos vet → "vet", grooming → "grooming-ops", b2b → "standard". Otros sin moduleId.
+    // Etiquetar cada evento seed con la instancia y sede correspondientes.
+    // Eventos de Pet 2 ya traen moduleId/sedeId explícitos; los de Pet 1 se asignan acá.
     ...e,
     moduleId: e.moduleId || (
       e.type === "vet"      ? "vet" :
@@ -15012,6 +19258,7 @@ function buildInitialAgendaEvents() {
       e.type === "b2b"      ? "standard" :
       null
     ),
+    sedeId: e.sedeId || "sede-pet1",
   }));
 }
 // Conservamos AGENDA_EVENTS como alias retro-compatible para fallbacks (módulos vet/grooming
@@ -15032,7 +19279,29 @@ const AGENDA_COLOR_CLASSES = {
   blue:    { bg: "bg-blue-100",    bgSoft: "bg-blue-50",    border: "border-blue-300",    text: "text-blue-800",    dot: "bg-blue-500"    },
 };
 
-function AgendaView({ onOpenPassport, userRole = "super", permissions = {}, events: eventsProp, setEvents: setEventsProp, invoices = [] }) {
+function AgendaView({ onOpenPassport, userRole = "super", permissions = {}, events: eventsProp, setEvents: setEventsProp, invoices = [], sedes = [], modules = [], user = null }) {
+  // === Pestañas de sede ===
+  // Si el sistema tiene multi-sede, mostramos pestañas en el header para
+  // filtrar los eventos. Funciona igual que en el hub del CRM:
+  // - Super ve todas las sedes
+  // - Otros roles ven solo sus user.sedeIds
+  // - "Todas" es una opción extra para ver el calendario global (solo super)
+  const visibleSedes = useMemo(() => {
+    if (!sedes || sedes.length === 0) return [];
+    if (userRole === "super" || !user?.sedeIds || user.sedeIds.length === 0) {
+      return sedes.filter(s => s.active !== false);
+    }
+    return sedes.filter(s => s.active !== false && user.sedeIds.includes(s.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sedes, userRole, user]);
+
+  // Sede activa en la agenda. Para el super, "all" muestra todas; para los demás
+  // arranca con su primera sede. Si solo hay 1 sede visible, "all" tampoco existe.
+  const [activeAgendaSede, setActiveAgendaSede] = useState(() => {
+    if (visibleSedes.length === 0) return "all";
+    if (userRole === "super" && visibleSedes.length > 1) return "all";
+    return visibleSedes[0]?.id || "all";
+  });
   // Helpers de permisos del CRM "agenda"
   const fieldLevel = (sectionId, fieldId) => getFieldLevel(permissions, userRole, "agenda", sectionId, fieldId);
   const canSeeCategory = (catId) => fieldLevel("categories", catId) !== "hidden";
@@ -15047,8 +19316,96 @@ function AgendaView({ onOpenPassport, userRole = "super", permissions = {}, even
     [userRole, permissions]
   );
 
+  // Si recibimos events del padre (state global), usamos eso. Si no, fallback al seed.
+  // IMPORTANTE: este bloque debe declararse ANTES de agendaFilters porque éste depende
+  // de eventsState para calcular los contadores de cada filtro.
+  const [localEvents, setLocalEvents] = useState(AGENDA_EVENTS);
+  const eventsState = eventsProp || localEvents;
+  const setEventsState = setEventsProp || setLocalEvents;
+
+  // === Filtros dinámicos de la agenda ===
+  // Los filtros NO son fijos: son "tipos base" (vet, grooming, pet, b2b) + cualquier
+  // CRM custom que el usuario haya creado (kind: "standard" con un nombre custom,
+  // o futuros kinds). Si creas un CRM "Equipos", aparece automáticamente como filtro.
+  //
+  // Cada filtro tiene:
+  // - id: identificador para activeFilters (tipo base como "vet", o moduleId como "equipos-abc")
+  // - label: texto visible
+  // - icon: componente
+  // - color: clave para AGENDA_COLOR_CLASSES (o color hex)
+  // - isModule: si es true, filtra por event.moduleId === id (no por event.type)
+  // - count: número de eventos que matchean
+  const agendaFilters = useMemo(() => {
+    const filters = [];
+
+    // 1) Tipos base: vet, grooming, pet, b2b (filtran por event.type)
+    const baseTypes = ["vet", "grooming", "pet", "b2b"];
+    baseTypes.forEach(type => {
+      if (!allowedCategories.includes(type)) return;
+      // Si hay sede activa específica, contamos solo eventos de esa sede
+      const relevant = eventsState.filter(e => {
+        if (e.type !== type) return false;
+        if (!activeAgendaSede || activeAgendaSede === "all") return true;
+        if (e.sedeId === activeAgendaSede) return true;
+        // moduleId puede pertenecer a la sede vía la lista de modules
+        const moduleIdsOfSede = (modules || []).filter(m => m.sedeId === activeAgendaSede && !m.removed).map(m => m.id);
+        return e.moduleId && moduleIdsOfSede.includes(e.moduleId);
+      });
+      const info = AGENDA_TYPES[type];
+      filters.push({
+        id: type,
+        label: info.label,
+        Icon: info.Icon,
+        color: info.color,
+        isModule: false,
+        count: relevant.length,
+      });
+    });
+
+    // 2) CRMs custom (kind === "standard" o un kind futuro distinto de vet/grooming).
+    // Aparecen como filtros adicionales SOLO si pertenecen a la sede activa.
+    const customModules = (modules || []).filter(m => {
+      if (m.removed) return false;
+      // Los CRMs vet/grooming ya están cubiertos por el tipo base. Saltamos.
+      if (m.kind === "vet" || m.kind === "grooming") return false;
+      // Filtramos por sede activa si la hay
+      if (activeAgendaSede && activeAgendaSede !== "all" && m.sedeId !== activeAgendaSede) return false;
+      return true;
+    });
+
+    customModules.forEach(m => {
+      const count = eventsState.filter(e => e.moduleId === m.id).length;
+      // Color heredado del CRM. Si kind es "standard" → azul. Si es custom → según paleta.
+      const color = m.kind === "standard" ? "blue" : "purple";
+      filters.push({
+        id: m.id,
+        label: m.name,
+        Icon: Briefcase,
+        color,
+        isModule: true,
+        count,
+      });
+    });
+
+    return filters;
+  }, [allowedCategories, eventsState, modules, activeAgendaSede]);
+
+  // Re-sincronizar activeFilters cuando cambian los filtros disponibles
+  // (por ejemplo al cambiar de sede o crear/eliminar un CRM).
+  useEffect(() => {
+    const availableIds = agendaFilters.map(f => f.id);
+    setActiveFilters(prev => {
+      const valid = prev.filter(f => availableIds.includes(f) || f === "web");
+      // Si quedó vacío, activamos todos
+      return valid.length > 0 ? valid : availableIds;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agendaFilters.map(f => f.id).join(",")]);
+
   const [viewMode, setViewMode] = useState("week"); // day | week | month
-  // Inicializar filtros activos solo con las categorías permitidas
+  // Inicializar filtros activos solo con las categorías permitidas (tipos base).
+  // Los CRMs custom se agregan dinámicamente al activar/desactivar; arrancan inactivos
+  // para no saturar la vista por default (el usuario los enciende cuando los necesita).
   const [activeFilters, setActiveFilters] = useState(allowedCategories);
   // Si cambian las categorías permitidas (cambio de rol/perm), re-sincronizar
   useEffect(() => {
@@ -15061,10 +19418,7 @@ function AgendaView({ onOpenPassport, userRole = "super", permissions = {}, even
     return d;
   });
   const [selectedEventId, setSelectedEventId] = useState(null);
-  // Si recibimos events del padre (state global), usamos eso. Si no, fallback al seed.
-  const [localEvents, setLocalEvents] = useState(AGENDA_EVENTS);
-  const eventsState = eventsProp || localEvents;
-  const setEventsState = setEventsProp || setLocalEvents;
+  // eventsState ya fue declarado arriba (antes de agendaFilters que lo necesita).
 
   // Handler: saltar a vista día sobre una fecha (desde "+N más" o cabecera)
   const jumpToDay = (d) => {
@@ -15098,19 +19452,58 @@ function AgendaView({ onOpenPassport, userRole = "super", permissions = {}, even
   // 1) Solo categorías permitidas para el rol (allowedCategories)
   // 2) Dentro de esas, las que el usuario activó en los chips (activeFilters)
   const filteredEvents = useMemo(() => {
-    // Filtros base: solo tipos permitidos para el rol Y activos en chips
-    let result = eventsState.filter(e =>
-      allowedCategories.includes(e.type) && activeFilters.includes(e.type)
-    );
+    // Construir sets de filtros activos: base types y module ids
+    // Los items en activeFilters pueden ser:
+    // - Tipo base (vet/grooming/pet/b2b/other) → filtra por event.type
+    // - moduleId (de un CRM custom) → filtra por event.moduleId
+    // - "web" → filtro ortogonal por origen
+    const activeBaseTypes = new Set();
+    const activeCustomModules = new Set();
+    activeFilters.forEach(f => {
+      if (f === "web") return; // se maneja aparte
+      if (["vet", "grooming", "pet", "b2b", "other"].includes(f)) {
+        activeBaseTypes.add(f);
+      } else {
+        activeCustomModules.add(f); // es un moduleId custom
+      }
+    });
+
+    // Un evento pasa si: su type está en activeBaseTypes, O su moduleId está en activeCustomModules
+    let result = eventsState.filter(e => {
+      if (!allowedCategories.includes(e.type)) return false;
+      if (activeBaseTypes.has(e.type)) return true;
+      if (e.moduleId && activeCustomModules.has(e.moduleId)) return true;
+      return false;
+    });
+
     // Filtro especial "web": cuando está activo, mostramos SOLO las citas que
-    // vienen del sitio público (fromWeb=true). Es un filtro ortogonal a los tipos —
-    // no representa un type sino un origen. Por default no está activo (se muestran todas).
+    // vienen del sitio público (fromWeb=true).
     if (activeFilters.includes("web")) {
       result = result.filter(e => e.fromWeb === true);
     }
+    // === Filtro por sede ===
+    if (activeAgendaSede && activeAgendaSede !== "all") {
+      const moduleIdsOfSede = (modules || [])
+        .filter(m => m.sedeId === activeAgendaSede && !m.removed)
+        .map(m => m.id);
+      result = result.filter(e => {
+        if (e.sedeId === activeAgendaSede) return true;
+        if (e.moduleId && moduleIdsOfSede.includes(e.moduleId)) return true;
+        return false;
+      });
+    } else if (userRole !== "super" && user?.sedeIds && user.sedeIds.length > 0) {
+      const moduleIdsOfUserSedes = (modules || [])
+        .filter(m => m.sedeId && user.sedeIds.includes(m.sedeId) && !m.removed)
+        .map(m => m.id);
+      result = result.filter(e => {
+        if (e.sedeId && user.sedeIds.includes(e.sedeId)) return true;
+        if (e.moduleId && moduleIdsOfUserSedes.includes(e.moduleId)) return true;
+        return false;
+      });
+    }
     return result;
   },
-    [activeFilters, allowedCategories, eventsState]
+    [activeFilters, allowedCategories, eventsState, activeAgendaSede, modules, userRole, user]
   );
 
   // Eventos por fecha (mapa rápido)
@@ -15167,45 +19560,84 @@ function AgendaView({ onOpenPassport, userRole = "super", permissions = {}, even
 
   return (
     <div className="space-y-5">
-      {/* Hero con KPIs */}
-      <div className="relative p-6 rounded-2xl bg-gradient-to-br from-white via-orange-50 to-orange-100 border border-stone-200 overflow-hidden">
-        <div className="flex items-center gap-4 flex-wrap">
-          <div className="flex-1 min-w-0">
-            <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold mb-1">
-              Calendario maestro · Todos los módulos
-            </div>
-            <h2 className="font-serif text-3xl font-semibold leading-tight">
-              <span className="text-orange-700">{stats.total}</span> eventos en agenda
-            </h2>
-            <p className="text-sm text-stone-600 mt-1 max-w-xl">
-              Vista unificada de citas veterinarias, grooming, recordatorios de mascotas y reuniones B2B.
-            </p>
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            <AgendaKpi label="Hoy" value={stats.today} accent />
-            <AgendaKpi label="Próximos 7 días" value={stats.week7} />
-          </div>
-        </div>
-      </div>
-
       {/* Toolbar: filtros + navegación + vista */}
-      <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-3 space-y-3">
-        {/* Filtros por tipo */}
+      <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
+        {/* === Pestañas de sede (nivel 1 — el "agrupador") ===
+            Cada sede agrupa sus propios CRMs. Los filtros de tipo (Vet, Grooming...)
+            operan DENTRO de la sede seleccionada. Si no hay multi-sede, esta barra se oculta. */}
+        {visibleSedes.length > 0 && (
+          <div className="px-3 py-2 flex items-center gap-1 bg-stone-100 border-b border-stone-200 overflow-x-auto">
+            {/* "Todas" solo para super con multi-sede */}
+            {userRole === "super" && visibleSedes.length > 1 && (
+              <button
+                onClick={() => setActiveAgendaSede("all")}
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold transition flex-shrink-0 ${
+                  activeAgendaSede === "all"
+                    ? "bg-stone-900 text-white shadow-md"
+                    : "text-stone-600 hover:bg-white"
+                }`}
+              >
+                <Layers size={12} />
+                Todas
+              </button>
+            )}
+            {visibleSedes.map(sede => {
+              const active = sede.id === activeAgendaSede;
+              // Contador de eventos visibles para esta sede
+              const moduleIdsOfSede = (modules || [])
+                .filter(m => m.sedeId === sede.id && !m.removed)
+                .map(m => m.id);
+              const sedeCount = eventsState.filter(e =>
+                e.sedeId === sede.id || (e.moduleId && moduleIdsOfSede.includes(e.moduleId))
+              ).length;
+              return (
+                <button
+                  key={sede.id}
+                  onClick={() => setActiveAgendaSede(sede.id)}
+                  className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold transition flex-shrink-0 ${
+                    active
+                      ? "bg-stone-900 text-white shadow-md"
+                      : "text-stone-600 hover:bg-white"
+                  }`}
+                >
+                  <MapPin size={12} strokeWidth={active ? 2.2 : 1.8} />
+                  {sede.name}
+                  {sedeCount > 0 && (
+                    <span className={`text-[10px] font-bold px-1.5 py-px rounded-full ${
+                      active ? "bg-white/20 text-white" : "bg-stone-200 text-stone-600"
+                    }`}>
+                      {sedeCount}
+                    </span>
+                  )}
+                  {sede.isDefault && (
+                    <span className={`text-[9px] font-bold uppercase px-1.5 py-px rounded ${
+                      active ? "bg-white/20 text-white" : "bg-orange-100 text-orange-700"
+                    }`}>
+                      Principal
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Contenido: filtros + navegación + vista */}
+        <div className="p-3 space-y-3">
+        {/* Filtros dinámicos: tipos base (vet/grooming/pet/b2b) + CRMs custom de la sede activa.
+            Si creas un CRM "Equipos" o "Entrenamiento", aparece automáticamente acá. */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs tracking-widest uppercase text-stone-500 font-semibold flex items-center gap-1.5 mr-1">
             <Filter size={12} /> Filtros
           </span>
-          {Object.entries(AGENDA_TYPES)
-            .filter(([type]) => allowedCategories.includes(type))
-            .map(([type, info]) => {
-            const Icon = info.Icon;
-            const active = activeFilters.includes(type);
-            const colors = AGENDA_COLOR_CLASSES[info.color];
-            const count = stats.byType[type] || 0;
+          {agendaFilters.map(f => {
+            const Icon = f.Icon;
+            const active = activeFilters.includes(f.id);
+            const colors = AGENDA_COLOR_CLASSES[f.color] || AGENDA_COLOR_CLASSES.blue;
             return (
               <button
-                key={type}
-                onClick={() => toggleFilter(type)}
+                key={f.id}
+                onClick={() => toggleFilter(f.id)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition border ${
                   active
                     ? `${colors.bg} ${colors.text} ${colors.border}`
@@ -15213,10 +19645,10 @@ function AgendaView({ onOpenPassport, userRole = "super", permissions = {}, even
                 }`}
               >
                 <Icon size={12} strokeWidth={1.8} />
-                {info.label}
+                {f.label}
                 <span className={`text-xs font-bold px-1.5 py-px rounded-full ${
                   active ? "bg-white" : "bg-stone-100"
-                }`}>{count}</span>
+                }`}>{f.count}</span>
               </button>
             );
           })}
@@ -15303,6 +19735,7 @@ function AgendaView({ onOpenPassport, userRole = "super", permissions = {}, even
               );
             })}
           </div>
+        </div>
         </div>
       </div>
 
@@ -16892,11 +21325,11 @@ function ClientServiceWindow({ client, conversation = [], passports = [], invoic
             </div>
           )}
 
-          {/* Última factura */}
+          {/* Última recibo */}
           {lastInvoice && (
             <div className="p-3 border-b border-stone-200">
               <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold mb-1.5">
-                Última factura
+                Última recibo
               </div>
               <div className="bg-white rounded-lg border border-stone-200 p-2">
                 <div className="flex items-center justify-between">
@@ -16924,7 +21357,7 @@ function ClientServiceWindow({ client, conversation = [], passports = [], invoic
               {openInvoices.length > 0 && (
                 <div className="mt-1.5 text-xs text-amber-700 flex items-center gap-1">
                   <AlertTriangle size={10} />
-                  {openInvoices.length} factura{openInvoices.length !== 1 ? "s" : ""} con saldo
+                  {openInvoices.length} recibo{openInvoices.length !== 1 ? "s" : ""} con saldo
                 </div>
               )}
             </div>
@@ -17137,114 +21570,47 @@ function ChatWindow({ client, conversation, onClose, onSend }) {
 }
 
 // === Burbuja de mensaje (estilo WhatsApp) ===
-function ChatBubble({ message, invoices = [], onOpenInvoice }) {
+function ChatBubble({ message, invoices = [], onOpenInvoice, clients = [] }) {
   const isOutgoing = message.direction === "out";
   const channelInfo = CHAT_CHANNELS[message.channel];
   const attachment = message.attachment;
 
-  // Preview de factura estilo "imagen recibida" — como WhatsApp Business renderiza un recibo
-  // Se ve como una mini-imagen de factura: papel térmico con cabecera, items, total
+  // Adjunto recibo — renderiza el documento PDF embebido en el chat.
+  // Click sobre el documento abre la recibo en pestaña.
   const renderInvoiceCard = () => {
     if (!attachment || attachment.type !== "invoice") return null;
     const inv = invoices.find(i => i.id === attachment.invoiceId);
     if (!inv) {
       return (
         <div className="rounded-lg bg-stone-100 border border-stone-200 p-2 mb-1.5 text-xs text-stone-500 italic">
-          Factura no encontrada
+          Recibo no encontrada
         </div>
       );
     }
-    // Tomar máximo 3 items visibles, mostrar "+ N más" si hay extras
-    const visibleItems = inv.items.slice(0, 3);
-    const extraCount = inv.items.length - visibleItems.length;
-    const stateBg = {
-      borrador: "bg-slate-200 text-slate-700",
-      emitido: "bg-blue-200 text-blue-800",
-      pagado: "bg-emerald-200 text-emerald-900",
-      finalizado: "bg-stone-200 text-stone-700",
-      vencido: "bg-red-200 text-red-800",
-    }[inv.state] || "bg-stone-200 text-stone-700";
-
     return (
-      <button
-        onClick={() => onOpenInvoice && onOpenInvoice(inv.id)}
-        className="w-full block rounded-lg overflow-hidden mb-1.5 hover:opacity-95 transition text-left shadow-sm"
-        style={{
-          background: "linear-gradient(180deg, #fdfaf6 0%, #f7f1e8 100%)",
-        }}
-      >
-        {/* Header del "papel" */}
-        <div className="px-3 pt-2.5 pb-2 border-b border-dashed border-stone-300 bg-white">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <div className="w-6 h-6 rounded bg-orange-500 grid place-items-center flex-shrink-0">
-                <PawPrint size={10} className="text-white" strokeWidth={2.4} />
-              </div>
-              <div className="min-w-0">
-                <div className="font-serif text-xs font-bold text-stone-900 leading-none">Cricket</div>
-                <div className="text-xs text-stone-500 leading-tight" style={{ fontSize: "9px" }}>Pet · System</div>
-              </div>
-            </div>
-            <span className={`text-xs font-bold px-1.5 py-px rounded uppercase tracking-wide ${stateBg}`} style={{ fontSize: "9px" }}>
-              {inv.state}
-            </span>
-          </div>
-          <div className="mt-1.5 flex items-baseline gap-1.5">
-            <span className="text-xs text-stone-500" style={{ fontSize: "10px" }}>FACTURA</span>
-            <span className="font-mono text-xs font-bold text-stone-900">{inv.number}</span>
-          </div>
-          <div className="text-xs text-stone-500 truncate" style={{ fontSize: "10px" }}>
-            {inv.clientName} · {inv.issueDate}
-          </div>
-        </div>
-
-        {/* Items resumidos */}
-        <div className="px-3 py-2 space-y-0.5 bg-white">
-          {visibleItems.map((item, idx) => (
-            <div key={item.id || idx} className="flex items-baseline gap-1.5 text-xs">
-              <span className="text-stone-700 truncate flex-1" style={{ fontSize: "11px" }}>
-                {item.description}
-              </span>
-              <span className="font-mono text-stone-800 flex-shrink-0" style={{ fontSize: "11px" }}>
-                ${item.subtotal.toFixed(2)}
-              </span>
-            </div>
-          ))}
-          {extraCount > 0 && (
-            <div className="text-xs text-stone-400 italic" style={{ fontSize: "10px" }}>
-              + {extraCount} {extraCount === 1 ? "ítem más" : "ítems más"}
-            </div>
-          )}
-        </div>
-
-        {/* Footer con total */}
-        <div className="px-3 py-2 border-t border-dashed border-stone-300 bg-orange-50 flex items-baseline justify-between">
-          <span className="text-xs tracking-widest uppercase font-bold text-stone-600" style={{ fontSize: "9px" }}>
-            TOTAL
+      <div className="mb-1.5">
+        <button
+          onClick={() => onOpenInvoice && onOpenInvoice(inv.id)}
+          className="block w-full text-left hover:opacity-95 transition rounded-xl overflow-hidden shadow-md"
+          title="Click para abrir la recibo completa"
+        >
+          <InvoiceDocumentPreview invoice={inv} clients={clients} compact={true} />
+        </button>
+        {/* Footer indicador: pista de que es clickeable */}
+        <div className="mt-1 px-2 py-1 bg-stone-50 border border-stone-200 rounded-md flex items-center justify-between gap-2 text-[10px] text-stone-500">
+          <span className="flex items-center gap-1">
+            <Receipt size={9} /> Recibo adjunta
           </span>
-          <span className="font-serif text-base font-bold text-orange-700">
-            ${inv.total.toFixed(2)}
-          </span>
+          <button
+            onClick={(e) => { e.stopPropagation(); onOpenInvoice && onOpenInvoice(inv.id); }}
+            className="text-orange-700 font-semibold hover:underline flex items-center gap-0.5"
+          >
+            <Eye size={9} /> Abrir
+          </button>
         </div>
-
-        {/* Tira inferior (zigzag tipo recibo) */}
-        <div
-          className="h-2"
-          style={{
-            background: "linear-gradient(135deg, transparent 25%, #f7f1e8 25%) -4px 0, linear-gradient(225deg, transparent 25%, #f7f1e8 25%) -4px 0",
-            backgroundSize: "8px 8px",
-            backgroundColor: "#fff",
-          }}
-        ></div>
-
-        {/* Acción ver detalle */}
-        <div className="px-3 py-1.5 bg-white border-t border-stone-100 flex items-center justify-center gap-1 text-xs text-orange-700 font-semibold">
-          <Eye size={10} /> <span style={{ fontSize: "10px" }}>Ver detalle</span>
-        </div>
-      </button>
+      </div>
     );
   };
-
   // Renderizar imagen adjunta
   const renderImageAttachment = () => {
     if (!attachment || attachment.type !== "image") return null;
@@ -17270,7 +21636,7 @@ function ChatBubble({ message, invoices = [], onOpenInvoice }) {
         {renderImageAttachment()}
         {renderInvoiceCard()}
         {/* Solo mostrar texto si no es solo el placeholder de attachment */}
-        {message.body && !(attachment && (message.body === "📄 Factura" || message.body.startsWith("📎"))) && (
+        {message.body && !(attachment && (message.body === "📄 Recibo" || message.body.startsWith("📎"))) && (
           <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
             {message.body}
           </div>
@@ -17451,7 +21817,7 @@ function ChatIntegrationsPanel({ onClose }) {
   );
 }
 
-// === Botón de mensaje (reusable: facturas, pasaportes, drawer) ===
+// === Botón de mensaje (reusable: recibos, pasaportes, drawer) ===
 function MessageClientButton({ onClick, variant = "default" }) {
   if (variant === "compact") {
     return (
@@ -17547,7 +21913,7 @@ function ChatHistoryPreview({ conversation, onOpenChat, max = 5 }) {
 
 // ========== VISTA: NUEVA VENTA / CATÁLOGO DE SERVICIOS ==========
 
-function NewServiceView({ services, setServices, supplies = [], clients = [], passports = [], invoices = [], setInvoices, groomingBookings = [], setGroomingBookings, agendaEvents = [], setAgendaEvents, userName, modules = [], onGoToSales, preselectedClient = null, onClearPreselected }) {
+function NewServiceView({ services, setServices, supplies = [], clients = [], passports = [], invoices = [], setInvoices, groomingBookings = [], setGroomingBookings, agendaEvents = [], setAgendaEvents, userName, modules = [], onGoToSales, preselectedClient = null, onClearPreselected, sedes = [], activeSedeId = null, userSedeIds = [], inventoryItems = [], paymentMethods = [] }) {
   const [activeTab, setActiveTab] = useState(preselectedClient ? "new-sale" : "new-sale"); // siempre arranca en new-sale, pero queda explícito
   const [lastInvoice, setLastInvoice] = useState(null); // banner de éxito
 
@@ -17556,13 +21922,13 @@ function NewServiceView({ services, setServices, supplies = [], clients = [], pa
       {/* Hero compacto */}
       <div className="relative p-5 rounded-2xl bg-gradient-to-br from-white via-orange-50 to-orange-100 border border-stone-200 overflow-hidden">
         <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold mb-1">
-          Operación · Facturación
+          Operación · Recibos
         </div>
         <h2 className="font-serif text-2xl sm:text-3xl font-semibold leading-tight">
           Crear venta o gestionar servicios
         </h2>
         <p className="text-sm text-stone-600 mt-1 max-w-2xl">
-          Construye facturas combinando servicios, productos y medicinas, o administra el catálogo de servicios reutilizables.
+          Construye recibos combinando servicios, productos y medicinas, o administra el catálogo de servicios reutilizables.
         </p>
       </div>
 
@@ -17586,7 +21952,7 @@ function NewServiceView({ services, setServices, supplies = [], clients = [], pa
               lastInvoice.paymentMode === "partial" ? "text-amber-900" :
               "text-stone-900"
             }`}>
-              Factura <span className="font-mono">{lastInvoice.number}</span> creada
+              Recibo <span className="font-mono">{lastInvoice.number}</span> creada
             </div>
             <div className={`text-sm mt-0.5 ${
               lastInvoice.paymentMode === "full" ? "text-emerald-800" :
@@ -17630,7 +21996,7 @@ function NewServiceView({ services, setServices, supplies = [], clients = [], pa
       {/* Tabs */}
       <div className="flex gap-1 bg-white border border-stone-200 rounded-2xl p-1.5 shadow-sm">
         {[
-          { id: "new-sale", label: "Nueva venta", Icon: ShoppingBag, desc: "Construye una factura" },
+          { id: "new-sale", label: "Nueva venta", Icon: ShoppingBag, desc: "Construye una recibo" },
           { id: "catalog",  label: "Catálogo de servicios", Icon: LayoutGrid, desc: "Gestiona servicios reutilizables" },
         ].map(t => {
           const Ic = t.Icon;
@@ -17673,6 +22039,11 @@ function NewServiceView({ services, setServices, supplies = [], clients = [], pa
           onSaleCreated={(invoice) => setLastInvoice(invoice)}
           preselectedClient={preselectedClient}
           onClearPreselected={onClearPreselected}
+          sedes={sedes}
+          activeSedeId={activeSedeId}
+          userSedeIds={userSedeIds}
+          inventoryItems={inventoryItems}
+          paymentMethods={paymentMethods}
         />
       )}
       {activeTab === "catalog" && (
@@ -17690,6 +22061,7 @@ function NewServiceView({ services, setServices, supplies = [], clients = [], pa
           userName={userName}
           modules={modules}
           onSaleCreated={(invoice) => setLastInvoice(invoice)}
+          activeSedeId={activeSedeId}
         />
       )}
     </div>
@@ -17697,15 +22069,25 @@ function NewServiceView({ services, setServices, supplies = [], clients = [], pa
 }
 
 // === Tab catálogo: gestionar servicios + venta puntual rápida ===
-function ServicesCatalogTab({ services, setServices, clients, passports, invoices, setInvoices, groomingBookings = [], setGroomingBookings, agendaEvents = [], setAgendaEvents, userName, modules = [], onSaleCreated }) {
+function ServicesCatalogTab({ services, setServices, clients, passports, invoices, setInvoices, groomingBookings = [], setGroomingBookings, agendaEvents = [], setAgendaEvents, userName, modules = [], onSaleCreated, activeSedeId = null }) {
   const [showWizard, setShowWizard] = useState(false);
   const [editingService, setEditingService] = useState(null);
   const [sellingService, setSellingService] = useState(null);
   const [moduleFilter, setModuleFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
 
+  // === Filtro base por sede ===
+  // El catálogo de servicios se filtra primero por la sede activa. Si el usuario
+  // está parado en Pet 2, solo ve los servicios de Pet 2 (con su precio/horario).
+  // Para el super sin contexto de sede, ve todos. Los servicios sin sedeId (legacy)
+  // se ven solo cuando no hay sede activa, para no contaminar las vistas por sede.
+  const servicesInSede = useMemo(() => {
+    if (!activeSedeId) return services;
+    return services.filter(s => s.sedeId === activeSedeId);
+  }, [services, activeSedeId]);
+
   const filtered = useMemo(() => {
-    let r = services;
+    let r = servicesInSede;
     if (moduleFilter !== "all") r = r.filter(s => s.module === moduleFilter);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -17715,20 +22097,28 @@ function ServicesCatalogTab({ services, setServices, clients, passports, invoice
       );
     }
     return r;
-  }, [services, moduleFilter, searchQuery]);
+  }, [servicesInSede, moduleFilter, searchQuery]);
 
   const stats = useMemo(() => ({
-    total: services.length,
-    vet: services.filter(s => s.module === "vet").length,
-    grooming: services.filter(s => s.module === "grooming").length,
-    b2b: services.filter(s => s.module === "b2b").length,
-  }), [services]);
+    total: servicesInSede.length,
+    vet: servicesInSede.filter(s => s.module === "vet").length,
+    grooming: servicesInSede.filter(s => s.module === "grooming").length,
+    b2b: servicesInSede.filter(s => s.module === "b2b").length,
+  }), [servicesInSede]);
 
   const handleSaveService = (data) => {
     if (editingService) {
       setServices(prev => prev.map(s => s.id === editingService.id ? { ...s, ...data } : s));
     } else {
-      const newService = { ...data, id: `srv-${Date.now().toString(36)}`, soldCount: 0, active: true };
+      // Al crear, el servicio nace en la sede activa (si la hay).
+      // Si no hay sede activa (raro), queda sin sedeId y solo se ve en la vista global.
+      const newService = {
+        ...data,
+        id: `srv-${Date.now().toString(36)}`,
+        soldCount: 0,
+        active: true,
+        sedeId: activeSedeId || null,
+      };
       setServices(prev => [newService, ...prev]);
     }
     setShowWizard(false);
@@ -17745,7 +22135,7 @@ function ServicesCatalogTab({ services, setServices, clients, passports, invoice
   };
 
   // Venta puntual rápida (un solo servicio) — desde el catálogo.
-  // Crea la factura y, según el módulo, también crea el booking de grooming
+  // Crea la recibo y, según el módulo, también crea el booking de grooming
   // (si la fecha es hoy) y/o el evento en la agenda. Todo queda enlazado por
   // invoiceNumber/invoiceId como hilo conductor.
   const handleConfirmQuickSale = (saleData) => {
@@ -17763,7 +22153,7 @@ function ServicesCatalogTab({ services, setServices, clients, passports, invoice
     const fmt = (d) => d.toISOString().slice(0, 10);
     const todayISO = fmt(today);
 
-    // === 1. Crear factura ===
+    // === 1. Crear recibo ===
     const newInvoice = {
       id: newInvoiceId,
       number: newNumber,
@@ -17814,7 +22204,7 @@ function ServicesCatalogTab({ services, setServices, clients, passports, invoice
           status: "pending",
           supplies: [],
           notes: "",
-          // Hilo conductor con la factura
+          // Hilo conductor con la recibo
           invoiceNumber: newNumber,
           invoiceId: newInvoiceId,
           fromQuickSale: true,
@@ -17845,7 +22235,7 @@ function ServicesCatalogTab({ services, setServices, clients, passports, invoice
         owner: client.name,
         professional: null,
         title: service.name,
-        reason: `Servicio agendado desde venta express. Factura ${newNumber}.`,
+        reason: `Servicio agendado desde venta express. Recibo ${newNumber}.`,
         room: service.room || null,
         status: "confirmada",
         price: service.price,
@@ -17987,7 +22377,7 @@ function ServicesCatalogTab({ services, setServices, clients, passports, invoice
   );
 }
 
-// === SaleBuilder: constructor de factura personalizada ===
+// === SaleBuilder: constructor de recibo personalizada ===
 // === Helpers de programación de servicios ===
 // Convierte "HH:MM" a minutos desde medianoche. Devuelve null si formato inválido.
 function parseHHMM(str) {
@@ -18058,16 +22448,33 @@ function findNextFreeTime(existingEvents, dateISO, proposedHHMM, durationMin) {
   return formatHHMM(proposedStart);
 }
 
-function SaleBuilder({ services, supplies = [], clients, passports, invoices, setInvoices, groomingBookings = [], setGroomingBookings, agendaEvents = [], setAgendaEvents, userName, modules = [], onSaleCreated, preselectedClient = null, onClearPreselected }) {
+function SaleBuilder({ services, supplies = [], clients, passports, invoices, setInvoices, groomingBookings = [], setGroomingBookings, agendaEvents = [], setAgendaEvents, userName, modules = [], onSaleCreated, preselectedClient = null, onClearPreselected, sedes = [], activeSedeId = null, userSedeIds = [], inventoryItems = [], paymentMethods = [] }) {
   const [client, setClient] = useState(preselectedClient);
   const [pet, setPet] = useState(null);
   const [items, setItems] = useState([]);
+  // === Sede de la recibo ===
+  // Reglas de autoselección:
+  // 1. Si el usuario tiene UNA sola sede asignada, se autoselecciona (no se puede cambiar)
+  // 2. Si está navegando dentro de una sede del CRM (activeSedeId), arranca con esa
+  // 3. Si no, queda null y el usuario debe elegir antes de emitir
+  const [saleSedeId, setSaleSedeId] = useState(() => {
+    if (userSedeIds && userSedeIds.length === 1) return userSedeIds[0];
+    if (activeSedeId) return activeSedeId;
+    if (sedes && sedes.length === 1) return sedes[0].id;
+    return null;
+  });
   const [showItemPicker, setShowItemPicker] = useState(null); // service | product | medicine | custom
   const [clientSearch, setClientSearch] = useState("");
   // Modalidad de pago: full (paga todo) | partial (abono) | deferred (paga al finalizar)
   const [paymentMode, setPaymentMode] = useState("full");
   const [partialAmount, setPartialAmount] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("efectivo"); // efectivo | tarjeta | transferencia | pago-movil
+  const [paymentMethod, setPaymentMethod] = useState("efectivo");
+
+  // === Delivery ===
+  // "none" = sin delivery, "paid" = delivery con costo, "free" = seguimiento sin costo
+  const [deliveryMode, setDeliveryMode] = useState("none");
+  const [deliveryCost, setDeliveryCost] = useState(5); // costo por defecto si es pagado
+  const DELIVERY_STAGES = ["preparando", "en-camino", "entregado"]; // efectivo | tarjeta | transferencia | pago-movil
 
   // Limpiar la preselección del padre una vez que se montó (para que si el usuario
   // luego cambia de cliente y vuelve a Nueva Venta, no se vuelva a forzar el viejo)
@@ -18078,16 +22485,22 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Búsqueda de clientes
+  // Búsqueda de clientes — filtrada por la sede de la recibo.
+  // Si seleccionas Pet 2 como sede, solo aparecen clientes de Pet 2. Los legacy
+  // sin sedeOrigenId no aparecen — para evitar fugas entre sedes.
   const filteredClients = useMemo(() => {
-    if (!clientSearch.trim()) return clients.slice(0, 8);
+    let base = clients;
+    if (saleSedeId) {
+      base = clients.filter(c => c.sedeOrigenId === saleSedeId);
+    }
+    if (!clientSearch.trim()) return base.slice(0, 8);
     const q = clientSearch.toLowerCase();
-    return clients.filter(c =>
-      c.name.toLowerCase().includes(q) ||
+    return base.filter(c =>
+      (c.name || "").toLowerCase().includes(q) ||
       (c.cedula || "").toLowerCase().includes(q) ||
       (c.phone || "").includes(q)
     ).slice(0, 12);
-  }, [clientSearch, clients]);
+  }, [clientSearch, clients, saleSedeId]);
 
   // Mascotas del cliente
   const clientPets = useMemo(() => {
@@ -18098,7 +22511,7 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
   }, [client, passports]);
 
   // Auto-seleccionar la mascota si el cliente tiene exactamente una.
-  // Útil cuando venimos del wizard "Crear ficha + factura": la mascota recién
+  // Útil cuando venimos del wizard "Crear ficha + recibo": la mascota recién
   // registrada es la única del tutor, no tiene sentido pedir un click extra.
   // No corre si ya hay mascota seleccionada (respeta cambios manuales del usuario).
   useEffect(() => {
@@ -18107,10 +22520,22 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
     }
   }, [client, pet, clientPets]);
 
+  // Si el cliente seleccionado no pertenece a la sede activa, lo deseleccionamos.
+  // Esto pasa por ejemplo si el usuario primero eligió un cliente y luego cambió
+  // la sede a una diferente — el cliente queda inconsistente con la sede.
+  useEffect(() => {
+    if (client && saleSedeId && client.sedeOrigenId && client.sedeOrigenId !== saleSedeId) {
+      setClient(null);
+      setPet(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saleSedeId]);
+
   // Cálculos
   const subtotal = useMemo(() => items.reduce((acc, it) => acc + it.total, 0), [items]);
   const tax = useMemo(() => Math.round(subtotal * 0.16), [subtotal]);
-  const total = subtotal + tax;
+  const deliveryAmount = deliveryMode === "paid" ? (Number(deliveryCost) || 0) : 0;
+  const total = subtotal + tax + deliveryAmount;
 
   const addItem = (item) => {
     setItems(prev => [...prev, {
@@ -18154,6 +22579,22 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
     ));
   };
 
+  // Actualizar recipe de un ítem de medicina. Recibe un patch parcial:
+  // { recipe: { medication, dose, ... } } y/o { recipePhoto: base64 }
+  const updateRecipe = (lineId, patch) => {
+    setItems(prev => prev.map(it => {
+      if (it.lineId !== lineId) return it;
+      const updated = { ...it };
+      if ("recipe" in patch) {
+        updated.recipe = patch.recipe ? { ...(it.recipe || {}), ...patch.recipe } : null;
+      }
+      if ("recipePhoto" in patch) {
+        updated.recipePhoto = patch.recipePhoto;
+      }
+      return updated;
+    }));
+  };
+
   const reset = () => {
     setClient(null);
     setPet(null);
@@ -18162,16 +22603,19 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
     setPaymentMode("full");
     setPartialAmount("");
     setPaymentMethod("efectivo");
+    // saleSedeId NO se resetea — la sede del usuario/contexto persiste para la siguiente recibo
   };
 
   // Validación del monto del abono (debe ser positivo y menor al total)
   const partialNum = Number(partialAmount) || 0;
   const partialValid = paymentMode !== "partial" || (partialNum > 0 && partialNum < total);
 
-  const canEmit = client && items.length > 0 && total > 0 && partialValid;
+  // Para emitir hace falta cliente, items, total y SEDE seleccionada (si el sistema tiene sedes)
+  const sedeRequired = sedes && sedes.length > 1;
+  const canEmit = client && items.length > 0 && total > 0 && partialValid && (!sedeRequired || !!saleSedeId);
 
   // Detectar si hay servicios de grooming/vet pendientes en los items.
-  // Si los hay, el botón "pagado" no cierra realmente la factura — el servicio aún
+  // Si los hay, el botón "pagado" no cierra realmente la recibo — el servicio aún
   // debe prestarse y se podrían agregar insumos extra durante la atención.
   const pendingServiceModules = useMemo(() => {
     const modules = items
@@ -18200,8 +22644,8 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
 
     // === Detectar si hay servicios pendientes de prestación ===
     // Un servicio (no producto, no medicina, no insumo) se considera "pendiente"
-    // si está incluido en la factura. Resolvemos su módulo contra el catálogo.
-    // Si hay al menos un servicio de grooming/vet, la factura no debe cerrarse al pagar:
+    // si está incluido en la recibo. Resolvemos su módulo contra el catálogo.
+    // Si hay al menos un servicio de grooming/vet, la recibo no debe cerrarse al pagar:
     // queda en "emitido" hasta que el área correspondiente preste el servicio.
     const serviceItemsWithModule = items
       .filter(it => it.type === "service" && it.sourceId)
@@ -18286,11 +22730,24 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
       paymentMode, // mantener trazabilidad de qué se eligió
       paidInAdvance, // flag clave: ya se cobró pero el servicio aún está pendiente
       createdBy: userName || "Operador",
-      // === moduleId: instancia de módulo a la que pertenece esta factura ===
+      // === moduleId: instancia de módulo a la que pertenece esta recibo ===
       // Tomamos el moduleId del primer servicio (ítem que tenía el botón "module:"
       // al agregarse al SaleBuilder). Si no hay servicios — solo productos/medicinas —
-      // queda null = factura del tronco (no pertenece a ningún módulo en particular).
+      // queda null = recibo del tronco (no pertenece a ningún módulo en particular).
       moduleId: items.find(it => it.moduleId)?.moduleId || null,
+      // === sedeId: sede a la que pertenece esta recibo ===
+      // Se asigna desde el selector de sede del SaleBuilder.
+      // Sirve para filtrar recibos por sede en la vista de Ventas.
+      sedeId: saleSedeId || null,
+      // === Delivery ===
+      delivery: deliveryMode !== "none" ? {
+        mode: deliveryMode,        // "paid" | "free"
+        cost: deliveryAmount,      // $ si es paid, 0 si es free
+        status: "preparando",      // preparando → en-camino → entregado
+        timeline: [
+          { status: "preparando", date: fmt(today), by: userName || "Operador" },
+        ],
+      } : null,
       // Datos del primer servicio detectado (si hay) para trazabilidad
       scheduledFor: hasPendingService ? todayISO : null,
       scheduledServiceModule: serviceItemsWithModule[0]?.module || null,
@@ -18301,7 +22758,7 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
 
     // === Crear bookings de grooming + eventos de agenda para los servicios ===
     // Acumulamos in-memory los slots ya ocupados *durante esta emisión* para que
-    // si la misma factura tiene 2 servicios en el mismo día, el segundo no caiga
+    // si la misma recibo tiene 2 servicios en el mismo día, el segundo no caiga
     // sobre el primero (los nuevos eventos aún no están en groomingBookings/agendaEvents).
     const provisionalGroomingBlocks = []; // { date, time, duration }
     const provisionalAgendaBlocks = [];   // { date, time, duration } — solo type=vet
@@ -18373,7 +22830,7 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
           owner: client.name,
           clientId: client.id,
           service: def.name,
-          reason: `Servicio facturado (${newNumber}). ${paidInAdvance ? "Pago anticipado." : ""}`.trim(),
+          reason: `Servicio recibodo (${newNumber}). ${paidInAdvance ? "Pago anticipado." : ""}`.trim(),
           room: def.room || "Sala de grooming",
           status: "pending",
           supplies: [],
@@ -18408,7 +22865,7 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
           owner: client.name,
           professional: null,
           title: def.name,
-          reason: `Servicio facturado en ${newNumber}.`,
+          reason: `Servicio recibodo en ${newNumber}.`,
           room: def.room || null,
           status: "confirmada",
           price: def.price,
@@ -18445,10 +22902,56 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
           <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold flex items-center gap-2">
             <User size={12} /> Cliente
           </div>
-          <div className="font-serif text-lg font-semibold mt-0.5">¿A quién facturas?</div>
+          <div className="font-serif text-lg font-semibold mt-0.5">¿A quién recibos?</div>
         </div>
 
         <div className="p-3 space-y-3">
+          {/* === Selector de sede ===
+              Solo se muestran las sedes a las que el usuario tiene acceso.
+              Si el usuario tiene 1 sola sede, no se muestra el selector entero
+              (la sede queda autoseleccionada). El super (sin restricción) ve todas. */}
+          {(() => {
+            // Calcular sedes a las que este usuario puede cobrar
+            const userRestricted = userSedeIds && userSedeIds.length > 0;
+            const availableSedes = userRestricted
+              ? (sedes || []).filter(s => userSedeIds.includes(s.id))
+              : (sedes || []);
+            // Si hay 0 o 1 sede disponible, no mostramos el selector
+            if (availableSedes.length <= 1) return null;
+            return (
+              <div className="bg-stone-50 border border-stone-200 rounded-xl p-3">
+                <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold mb-2 flex items-center gap-1.5">
+                  <MapPin size={11} />
+                  Sede de la recibo *
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {availableSedes.map(sede => {
+                    const active = saleSedeId === sede.id;
+                    return (
+                      <button
+                        key={sede.id}
+                        onClick={() => setSaleSedeId(sede.id)}
+                        className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition flex items-center gap-1 ${
+                          active
+                            ? "bg-orange-600 text-white shadow"
+                            : "bg-white border border-stone-200 text-stone-700 hover:border-orange-400"
+                        }`}
+                      >
+                        <MapPin size={10} />
+                        {sede.name}
+                      </button>
+                    );
+                  })}
+                </div>
+                {!saleSedeId && (
+                  <div className="text-[11px] text-amber-700 mt-2 italic">
+                    Selecciona una sede antes de cobrar.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Cliente seleccionado */}
           {client ? (
             <>
@@ -18549,7 +23052,7 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
         </div>
       </div>
 
-      {/* COLUMNA 2-3: Factura en construcción */}
+      {/* COLUMNA 2-3: Recibo en construcción */}
       <div className="lg:col-span-2 bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden flex flex-col">
         <div className="p-4 border-b border-stone-200 bg-gradient-to-br from-white to-orange-50 flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-orange-700 text-white grid place-items-center flex-shrink-0 shadow">
@@ -18557,7 +23060,7 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold">
-              Factura en construcción
+              Recibo en construcción
             </div>
             <div className="font-serif text-lg font-semibold mt-0.5">
               {items.length === 0 ? "Sin ítems aún" : `${items.length} ${items.length === 1 ? "ítem" : "ítems"}`}
@@ -18579,11 +23082,18 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
         <div className="p-3 grid grid-cols-2 lg:grid-cols-5 gap-2 border-b border-stone-200 bg-stone-50">
           {(() => {
             // Generar UN botón por cada módulo instalado de tipo vet/grooming/custom.
-            // Esto permite que si tienes "Clínica Vet" + "Veterinaria 2" + "Grooming"
-            // veas 3 botones distintos en SaleBuilder, cada uno abriendo el catálogo
-            // filtrado de su instancia. Producto/Medicina/Personalizado son del tronco.
+            // Filtramos por sede activa de la recibo: si saleSedeId === "sede-pet1",
+            // solo aparecen los CRMs de Pet 1. Esto evita que veas "Veterinaria Pet 2"
+            // cuando estás cobrando en Pet 1. Si aún no hay sede seleccionada,
+            // mostramos todos los CRMs (el usuario aún no decidió).
             const buttons = [];
-            const installedModules = (modules || []).filter(m => !m.removed && (m.kind === "vet" || m.kind === "grooming"));
+            const installedModules = (modules || []).filter(m => {
+              if (m.removed) return false;
+              if (m.kind !== "vet" && m.kind !== "grooming") return false;
+              // Filtro estricto por sede de la recibo
+              if (saleSedeId && m.sedeId && m.sedeId !== saleSedeId) return false;
+              return true;
+            });
 
             installedModules.forEach(m => {
               const isVet = m.kind === "vet";
@@ -18635,7 +23145,7 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
           {items.length === 0 ? (
             <div className="p-8 text-center">
               <Receipt size={28} className="text-stone-300 mx-auto mb-2" />
-              <div className="text-sm font-semibold text-stone-700">La factura está vacía</div>
+              <div className="text-sm font-semibold text-stone-700">La recibo está vacía</div>
               <div className="text-xs text-stone-500 mt-1">
                 Usa los botones de arriba para agregar servicios, productos o medicinas.
               </div>
@@ -18649,6 +23159,7 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
                   onUpdateQty={(qty) => updateQty(it.lineId, qty)}
                   onUpdateUnit={(unit) => updateUnit(it.lineId, unit)}
                   onUpdateScheduled={(patch) => updateScheduled(it.lineId, patch)}
+                  onUpdateRecipe={(patch) => updateRecipe(it.lineId, patch)}
                   onRemove={() => removeItem(it.lineId)}
                 />
               ))}
@@ -18667,10 +23178,83 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
               <span>IVA 16%</span>
               <span className="font-mono">${tax.toLocaleString()}</span>
             </div>
+            {deliveryAmount > 0 && (
+              <div className="flex justify-between text-cyan-700">
+                <span className="flex items-center gap-1"><Truck size={12} /> Delivery</span>
+                <span className="font-mono">${deliveryAmount.toLocaleString()}</span>
+              </div>
+            )}
             <div className="flex justify-between font-bold text-lg pt-2 border-t border-stone-300">
               <span>Total</span>
               <span className="font-mono text-orange-700">${total.toLocaleString()}</span>
             </div>
+          </div>
+
+          {/* === Delivery === */}
+          <div className="bg-white border border-stone-200 rounded-xl p-3 space-y-2">
+            <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold flex items-center gap-1.5">
+              <Truck size={11} /> Delivery
+            </div>
+            <div className="grid grid-cols-3 gap-1.5">
+              {[
+                { id: "none", label: "Sin delivery",         desc: "Retira en sede",     color: "stone" },
+                { id: "paid", label: "Delivery con costo",   desc: "Envío cobrado",      color: "cyan" },
+                { id: "free", label: "Solo seguimiento",     desc: "Envío sin costo",    color: "emerald" },
+              ].map(opt => {
+                const active = deliveryMode === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setDeliveryMode(opt.id)}
+                    className={`p-2.5 rounded-xl border-2 text-left transition ${
+                      active
+                        ? opt.color === "cyan"
+                          ? "border-cyan-500 bg-cyan-50"
+                          : opt.color === "emerald"
+                            ? "border-emerald-500 bg-emerald-50"
+                            : "border-stone-400 bg-stone-50"
+                        : "border-stone-200 bg-white hover:border-stone-300"
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 grid place-items-center ${
+                        active
+                          ? opt.color === "cyan" ? "border-cyan-500 bg-cyan-500" : opt.color === "emerald" ? "border-emerald-500 bg-emerald-500" : "border-stone-500 bg-stone-500"
+                          : "border-stone-300"
+                      }`}>
+                        {active && <Check size={8} className="text-white" strokeWidth={3} />}
+                      </div>
+                      <span className="text-xs font-semibold text-stone-800">{opt.label}</span>
+                    </div>
+                    <div className="text-[10px] text-stone-500 pl-5">{opt.desc}</div>
+                  </button>
+                );
+              })}
+            </div>
+            {deliveryMode === "paid" && (
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-xs text-stone-600 font-semibold">Costo del envío:</span>
+                <div className="flex items-center gap-0.5 bg-stone-100 rounded-lg px-2 py-1">
+                  <span className="text-xs font-mono text-stone-500">$</span>
+                  <input
+                    type="number"
+                    value={deliveryCost}
+                    onChange={(e) => setDeliveryCost(e.target.value)}
+                    className="w-16 bg-transparent text-xs font-mono font-bold outline-none text-right"
+                    min="0"
+                  />
+                </div>
+              </div>
+            )}
+            {deliveryMode !== "none" && (
+              <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-2 text-[11px] text-cyan-800 flex items-center gap-1.5">
+                <Info size={11} className="flex-shrink-0" />
+                {deliveryMode === "paid"
+                  ? "Se agregará el costo del envío al total. El recibo incluirá un tracker de seguimiento."
+                  : "El recibo incluirá un tracker de seguimiento de delivery sin costo adicional."}
+              </div>
+            )}
           </div>
 
           {/* Modalidad de pago — solo visible cuando hay total > 0 */}
@@ -18766,30 +23350,80 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
                 <div>
                   <div className="text-xs font-semibold text-stone-700 mb-1.5">Método</div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                    {[
-                      { id: "efectivo",      label: "Efectivo",     Icon: Banknote },
-                      { id: "tarjeta",       label: "Tarjeta",      Icon: CreditCard },
-                      { id: "transferencia", label: "Transf.",      Icon: ArrowRightLeft },
-                      { id: "pago-movil",    label: "Pago móvil",   Icon: Smartphone },
-                    ].map(m => {
-                      const Ic = m.Icon;
-                      const active = paymentMethod === m.id;
-                      return (
-                        <button
-                          key={m.id}
-                          onClick={() => setPaymentMethod(m.id)}
-                          className={`flex flex-col items-center gap-1 p-2 rounded-lg border text-xs font-semibold transition ${
-                            active
-                              ? "bg-stone-900 border-stone-900 text-white"
-                              : "bg-white border-stone-200 text-stone-600 hover:border-stone-400"
-                          }`}
-                        >
-                          <Ic size={12} strokeWidth={1.8} />
-                          {m.label}
-                        </button>
-                      );
-                    })}
+                    {(() => {
+                      // Mapa de iconos: el ajuste guarda un nombre string para
+                      // que sea serializable; aquí lo resolvemos al componente real.
+                      const ICON_MAP = {
+                        Banknote, CreditCard, ArrowRightLeft, Smartphone, Wallet, Coins,
+                      };
+                      // Si vienen métodos configurados, usamos esos (filtrando los habilitados).
+                      // Si no, fallback al hardcoded para compatibilidad con vistas que no pasen el prop.
+                      const enabled = (paymentMethods && paymentMethods.length > 0)
+                        ? paymentMethods.filter(m => m.enabled).map(m => ({
+                            id: m.id, label: m.label, Icon: ICON_MAP[m.iconName] || Wallet, source: m,
+                          }))
+                        : [
+                            { id: "efectivo",      label: "Efectivo",     Icon: Banknote },
+                            { id: "tarjeta",       label: "Tarjeta",      Icon: CreditCard },
+                            { id: "transferencia", label: "Transf.",      Icon: ArrowRightLeft },
+                            { id: "pago-movil",    label: "Pago móvil",   Icon: Smartphone },
+                          ];
+                      return enabled.map(m => {
+                        const Ic = m.Icon;
+                        const active = paymentMethod === m.id;
+                        return (
+                          <button
+                            key={m.id}
+                            onClick={() => setPaymentMethod(m.id)}
+                            className={`flex flex-col items-center gap-1 p-2 rounded-lg border text-xs font-semibold transition ${
+                              active
+                                ? "bg-stone-900 border-stone-900 text-white"
+                                : "bg-white border-stone-200 text-stone-600 hover:border-stone-400"
+                            }`}
+                          >
+                            <Ic size={12} strokeWidth={1.8} />
+                            {m.label}
+                          </button>
+                        );
+                      });
+                    })()}
                   </div>
+
+                  {/* === Detalles del método seleccionado === */}
+                  {(() => {
+                    const selectedMethod = (paymentMethods || []).find(m => m.id === paymentMethod);
+                    if (!selectedMethod) return null;
+                    const rows = renderPaymentMethodDetails(selectedMethod);
+                    if (!rows || rows.length === 0) {
+                      // Si no hay datos cargados, mostrar aviso al admin
+                      const isCash = selectedMethod.id === "efectivo";
+                      if (isCash) return null;
+                      return (
+                        <div className="mt-2 bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-xs text-amber-800 flex items-start gap-2">
+                          <AlertCircle size={11} className="flex-shrink-0 mt-0.5" />
+                          <div>
+                            <strong className="block">Sin datos configurados</strong>
+                            <span>El admin debe completar los datos de este método en Ajustes → Métodos de pago para que se puedan enviar al cliente.</span>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="mt-2 bg-blue-50 border border-blue-200 rounded-lg p-2.5 space-y-1.5">
+                        <div className="flex items-center gap-1.5 text-[10px] tracking-widest uppercase text-blue-700 font-bold">
+                          <Info size={10} /> Datos para el cliente
+                        </div>
+                        <div className="space-y-1">
+                          {rows.map((r, i) => (
+                            <div key={i} className="flex items-baseline justify-between gap-2 text-xs">
+                              <span className={`text-stone-600 ${r.alert ? "font-bold text-red-700" : ""}`}>{r.label}:</span>
+                              <span className={`text-stone-900 font-semibold text-right break-all ${r.mono ? "font-mono" : ""}`}>{r.value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -18802,14 +23436,14 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
               }`}>
                 {paymentMode === "full" && hasPendingService && (
                   <>
-                    <strong>Pago anticipado.</strong> La factura quedará en <strong>emitido</strong> hasta que {pendingServiceModules.includes("grooming") ? "Grooming" : "Veterinaria"} complete el servicio. Si se agregan insumos, se cobrará la diferencia al cierre.
+                    <strong>Pago anticipado.</strong> La recibo quedará en <strong>emitido</strong> hasta que {pendingServiceModules.includes("grooming") ? "Grooming" : "Veterinaria"} complete el servicio. Si se agregan insumos, se cobrará la diferencia al cierre.
                   </>
                 )}
-                {paymentMode === "full" && !hasPendingService && <>La factura se emitirá como <strong>pagada</strong>. Saldo: $0.</>}
+                {paymentMode === "full" && !hasPendingService && <>La recibo se emitirá como <strong>pagada</strong>. Saldo: $0.</>}
                 {paymentMode === "partial" && (
-                  <>La factura se emitirá <strong>parcialmente pagada</strong>.{partialNum > 0 && partialNum < total && <> Saldo pendiente: <span className="font-mono font-bold">${(total - partialNum).toLocaleString()}</span>.</>}</>
+                  <>La recibo se emitirá <strong>parcialmente pagada</strong>.{partialNum > 0 && partialNum < total && <> Saldo pendiente: <span className="font-mono font-bold">${(total - partialNum).toLocaleString()}</span>.</>}</>
                 )}
-                {paymentMode === "deferred" && <>La factura se emitirá <strong>pendiente</strong>. Saldo: <span className="font-mono font-bold">${total.toLocaleString()}</span>.</>}
+                {paymentMode === "deferred" && <>La recibo se emitirá <strong>pendiente</strong>. Saldo: <span className="font-mono font-bold">${total.toLocaleString()}</span>.</>}
               </div>
             </div>
           )}
@@ -18827,9 +23461,9 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
             {!client ? "Selecciona un cliente" :
              items.length === 0 ? "Agrega al menos un ítem" :
              paymentMode === "partial" && !partialValid ? "Indica el monto del abono" :
-             paymentMode === "full" ? "Emitir factura y cobrar" :
+             paymentMode === "full" ? "Emitir recibo y cobrar" :
              paymentMode === "partial" ? `Emitir y cobrar abono $${partialNum.toLocaleString()}` :
-             "Emitir factura (cobro pendiente)"}
+             "Emitir recibo (cobro pendiente)"}
           </button>
         </div>
       </div>
@@ -18837,13 +23471,12 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
       {/* Modal selector de ítems */}
       {showItemPicker && (
         <ItemPickerModal
-          // Si showItemPicker es un objeto, extraemos type y moduleId.
-          // Si es un string (tronco: product/medicine/custom), pasamos type directo.
           type={typeof showItemPicker === "object" ? showItemPicker.type : showItemPicker}
           moduleId={typeof showItemPicker === "object" ? showItemPicker.moduleId : null}
           modules={modules}
           services={services}
           supplies={supplies}
+          inventoryItems={inventoryItems}
           onClose={() => setShowItemPicker(null)}
           onAdd={addItem}
         />
@@ -18852,8 +23485,8 @@ function SaleBuilder({ services, supplies = [], clients, passports, invoices, se
   );
 }
 
-// === Fila de ítem en la factura en construcción ===
-function SaleItemRow({ item, onUpdateQty, onUpdateUnit, onUpdateScheduled, onRemove }) {
+// === Fila de ítem en la recibo en construcción ===
+function SaleItemRow({ item, onUpdateQty, onUpdateUnit, onUpdateScheduled, onUpdateRecipe, onRemove }) {
   const typeColors = {
     service:  { bg: "bg-orange-100",  text: "text-orange-700",  Icon: Stethoscope, label: "Servicio" },
     product:  { bg: "bg-blue-100",    text: "text-blue-700",    Icon: ShoppingBag, label: "Producto" },
@@ -18862,10 +23495,25 @@ function SaleItemRow({ item, onUpdateQty, onUpdateUnit, onUpdateScheduled, onRem
   }[item.type] || { bg: "bg-stone-100", text: "text-stone-700", Icon: Tag, label: "Ítem" };
   const Ic = typeColors.Icon;
 
+  const isMedicine = item.type === "medicine";
+  const [showRecipe, setShowRecipe] = useState(false);
+
   // Solo los servicios pueden programarse — productos/medicinas/insumos no agendan.
   const isSchedulable = item.type === "service";
   // Hoy en formato YYYY-MM-DD para el min del input de fecha
   const todayISO = new Date().toISOString().slice(0, 10);
+
+  // Handler para foto de recipe
+  const handleRecipePhoto = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      onUpdateRecipe?.({ recipePhoto: ev.target.result });
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
 
   return (
     <div className="p-3 flex items-start gap-3">
@@ -18875,9 +23523,14 @@ function SaleItemRow({ item, onUpdateQty, onUpdateUnit, onUpdateScheduled, onRem
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline justify-between gap-2 flex-wrap">
           <span className="font-semibold text-sm truncate">{item.name}</span>
-          <span className={`text-xs font-bold uppercase tracking-wide ${typeColors.text}`}>
-            {typeColors.label}
-          </span>
+          <div className="flex items-center gap-1.5">
+            {isMedicine && item.requiresRecipe && (
+              <span className="text-[9px] font-bold px-1.5 py-px rounded bg-red-100 text-red-700 uppercase">Recipe</span>
+            )}
+            <span className={`text-xs font-bold uppercase tracking-wide ${typeColors.text}`}>
+              {typeColors.label}
+            </span>
+          </div>
         </div>
         {item.note && (
           <div className="text-xs text-stone-500 mt-0.5 italic truncate">{item.note}</div>
@@ -18920,9 +23573,88 @@ function SaleItemRow({ item, onUpdateQty, onUpdateUnit, onUpdateScheduled, onRem
           </span>
         </div>
 
+        {/* === Recipe para medicinas === */}
+        {isMedicine && onUpdateRecipe && (
+          <div className="mt-2 pt-2 border-t border-stone-100">
+            <button
+              type="button"
+              onClick={() => setShowRecipe(!showRecipe)}
+              className={`flex items-center gap-1.5 text-xs font-semibold transition ${
+                showRecipe || item.recipe || item.recipePhoto
+                  ? "text-purple-700"
+                  : item.requiresRecipe
+                    ? "text-red-600 hover:text-red-700"
+                    : "text-stone-500 hover:text-purple-600"
+              }`}
+            >
+              <FileText size={11} />
+              {item.recipe || item.recipePhoto
+                ? "📋 Recipe adjunto"
+                : item.requiresRecipe
+                  ? "⚠️ Adjuntar recipe (requerido)"
+                  : "+ Adjuntar recipe (opcional)"}
+              <ChevronDown size={10} className={`transition ${showRecipe ? "rotate-180" : ""}`} />
+            </button>
+
+            {showRecipe && (
+              <div className="mt-2 space-y-2 bg-purple-50 border border-purple-200 rounded-xl p-2.5">
+                {/* Campos de receta */}
+                <input
+                  type="text"
+                  value={item.recipe?.medication || item.name}
+                  onChange={(e) => onUpdateRecipe({ recipe: { ...(item.recipe || {}), medication: e.target.value } })}
+                  placeholder="Medicamento"
+                  className="w-full px-2.5 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-purple-400 bg-white font-semibold"
+                />
+                <div className="grid grid-cols-2 gap-1.5">
+                  <input type="text" value={item.recipe?.dose || ""}
+                    onChange={(e) => onUpdateRecipe({ recipe: { ...(item.recipe || {}), dose: e.target.value } })}
+                    placeholder="Dosis" className="px-2.5 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-purple-400 bg-white" />
+                  <input type="text" value={item.recipe?.frequency || ""}
+                    onChange={(e) => onUpdateRecipe({ recipe: { ...(item.recipe || {}), frequency: e.target.value } })}
+                    placeholder="Frecuencia (c/8h)" className="px-2.5 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-purple-400 bg-white" />
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <input type="text" value={item.recipe?.duration || ""}
+                    onChange={(e) => onUpdateRecipe({ recipe: { ...(item.recipe || {}), duration: e.target.value } })}
+                    placeholder="Duración (7 días)" className="px-2.5 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-purple-400 bg-white" />
+                  <input type="text" value={item.recipe?.route || ""}
+                    onChange={(e) => onUpdateRecipe({ recipe: { ...(item.recipe || {}), route: e.target.value } })}
+                    placeholder="Vía (oral, IM)" className="px-2.5 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-purple-400 bg-white" />
+                </div>
+                <textarea value={item.recipe?.instructions || ""}
+                  onChange={(e) => onUpdateRecipe({ recipe: { ...(item.recipe || {}), instructions: e.target.value } })}
+                  placeholder="Indicaciones para el tutor..."
+                  rows={2} className="w-full px-2.5 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-purple-400 bg-white resize-none" />
+
+                {/* Foto del recipe */}
+                <div>
+                  <div className="text-[10px] font-semibold text-purple-700 uppercase tracking-wider mb-1">Foto del recipe</div>
+                  {item.recipePhoto ? (
+                    <div className="relative rounded-lg overflow-hidden border border-purple-200">
+                      <img src={item.recipePhoto} alt="Recipe" className="w-full h-24 object-cover" />
+                      <button
+                        onClick={() => onUpdateRecipe({ recipePhoto: null })}
+                        className="absolute top-1 right-1 w-6 h-6 rounded-full bg-red-600 text-white grid place-items-center"
+                      >
+                        <X size={10} />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border-2 border-dashed border-purple-200 hover:border-purple-400 text-purple-600 hover:text-purple-700 cursor-pointer transition text-xs font-semibold">
+                      <Camera size={12} /> Subir foto del recipe
+                      <input type="file" accept="image/*" onChange={handleRecipePhoto} className="hidden" />
+                    </label>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* === Programación de servicio (solo aplica a items de tipo "service") ===
             Permite elegir fecha y hora del servicio. Si ambos quedan vacíos,
-            al emitir la factura se asume "hoy a la hora actual" y, si la slot
+            al emitir la recibo se asume "hoy a la hora actual" y, si la slot
             está ocupada, se desliza al siguiente slot libre del día. */}
         {isSchedulable && onUpdateScheduled && (
           <div className="mt-2 pt-2 border-t border-stone-100">
@@ -18972,7 +23704,7 @@ function SaleItemRow({ item, onUpdateQty, onUpdateUnit, onUpdateScheduled, onRem
 }
 
 // === Modal selector de ítems para agregar ===
-function ItemPickerModal({ type, moduleId = null, modules = [], services, supplies = [], onClose, onAdd }) {
+function ItemPickerModal({ type, moduleId = null, modules = [], services, supplies = [], inventoryItems = [], onClose, onAdd }) {
   const [search, setSearch] = useState("");
   const [customName, setCustomName] = useState("");
   const [customPrice, setCustomPrice] = useState("");
@@ -19009,8 +23741,8 @@ function ItemPickerModal({ type, moduleId = null, modules = [], services, suppli
   } : {
     service:  { title: "Agregar servicio del catálogo", source: services.filter(s => s.active && s.module !== "grooming"), color: "orange" },
     grooming: { title: "Agregar de Grooming", source: groomingSubtab === "services" ? groomingServices : activeSupplies, color: "emerald" },
-    product:  { title: "Agregar producto", source: PRODUCT_CATALOG, color: "blue" },
-    medicine: { title: "Agregar medicina", source: MEDICINE_CATALOG, color: "purple" },
+    product:  { title: "Agregar producto", source: inventoryItems.filter(i => i.isProduct && i.category !== "Medicamento" && !i.hidden), color: "blue" },
+    medicine: { title: "Agregar medicina", source: inventoryItems.filter(i => i.isProduct && i.category === "Medicamento" && !i.hidden), color: "purple" },
     custom:   { title: "Agregar ítem personalizado", source: [], color: "stone" },
   }[type];
 
@@ -19061,8 +23793,12 @@ function ItemPickerModal({ type, moduleId = null, modules = [], services, suppli
       unit: item.price,
       total: item.price,
       note: item.presentation || item.category || "",
-      // Etiquetar con moduleId para que la factura herede esa pertenencia
+      // Etiquetar con moduleId para que la recibo herede esa pertenencia
       moduleId: type === "module" ? moduleId : (item.moduleId || resolveServiceModuleId(item) || null),
+      // Medicinas: flag de recipe + datos vacíos para rellenar
+      requiresRecipe: item.requiresRecipe || false,
+      recipe: null,   // se llena desde SaleItemRow si aplica
+      recipePhoto: null,
     });
   };
 
@@ -19197,9 +23933,35 @@ function ItemPickerModal({ type, moduleId = null, modules = [], services, suppli
                             {s.duration && ` · ${s.duration} min`}
                           </>
                         )}
-                        {type === "product" && s.category}
+                        {type === "product" && (
+                          <span className="flex items-center gap-1">
+                            {s.category}
+                            {s.stock != null && (
+                              <span className={`text-[10px] font-bold px-1.5 py-px rounded ${
+                                s.stock <= (s.minStock || 0) ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"
+                              }`}>
+                                Stock: {s.stock}
+                              </span>
+                            )}
+                          </span>
+                        )}
                         {type === "medicine" && (
-                          <>{s.presentation} · {s.indication}</>
+                          <span className="flex items-center gap-1 flex-wrap">
+                            {s.presentation && <>{s.presentation} · </>}
+                            {s.indication || ""}
+                            {s.stock != null && (
+                              <span className={`text-[10px] font-bold px-1.5 py-px rounded ${
+                                s.stock <= (s.minStock || 0) ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"
+                              }`}>
+                                Stock: {s.stock}
+                              </span>
+                            )}
+                            {s.requiresRecipe && (
+                              <span className="inline-flex items-center gap-0.5 px-1.5 py-px rounded bg-red-100 text-red-700 text-[9px] font-bold uppercase">
+                                <FileText size={8} /> Recipe
+                              </span>
+                            )}
+                          </span>
                         )}
                       </div>
                     </div>
@@ -19231,7 +23993,7 @@ function ItemPickerModal({ type, moduleId = null, modules = [], services, suppli
                   : "bg-stone-200 text-stone-400 cursor-not-allowed"
               }`}
             >
-              <Plus size={13} /> Agregar a la factura
+              <Plus size={13} /> Agregar a la recibo
             </button>
           )}
         </div>
@@ -19395,7 +24157,7 @@ function SellServiceModal({ service, clients, passports, onClose, onConfirm }) {
     if (!clientSearch.trim()) return clients.slice(0, 8);
     const q = clientSearch.toLowerCase();
     return clients.filter(c =>
-      c.name.toLowerCase().includes(q) ||
+      (c.name || "").toLowerCase().includes(q) ||
       (c.cedula || "").toLowerCase().includes(q) ||
       (c.phone || "").includes(q)
     ).slice(0, 12);
@@ -19862,7 +24624,7 @@ function SellServiceModal({ service, clients, passports, onClose, onConfirm }) {
               <div className="bg-gradient-to-br from-emerald-50 to-white border-2 border-emerald-200 rounded-xl p-4">
                 <div className="flex items-baseline justify-between">
                   <div>
-                    <div className="text-xs tracking-widest uppercase text-emerald-700 font-semibold">Total a facturar</div>
+                    <div className="text-xs tracking-widest uppercase text-emerald-700 font-semibold">Total a cobrar</div>
                     <div className="text-xs text-stone-500 mt-0.5">Subtotal + IVA 16%</div>
                   </div>
                   <div className="text-right">
@@ -19880,7 +24642,7 @@ function SellServiceModal({ service, clients, passports, onClose, onConfirm }) {
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2.5 text-xs">
                 <AlertCircle size={13} className="text-amber-700 flex-shrink-0 mt-0.5" />
                 <div className="text-amber-900 leading-relaxed">
-                  Al confirmar se crea una factura en estado <strong>borrador</strong> en el módulo Ventas.
+                  Al confirmar se crea una recibo en estado <strong>borrador</strong> en el módulo Ventas.
                   Podrás emitirla, registrar abonos o eliminarla desde ahí.
                 </div>
               </div>
@@ -20421,12 +25183,38 @@ function NewServiceWizard({ editingService, onClose, onSave }) {
 
 // ========== VISTA: ATENCIÓN GROOMING (operación en sala) ==========
 // Vista táctil simplificada para que el groomer trabaje su día.
-// Sin precios, sin facturación detallada — solo flujo de servicio + insumos.
+// Sin precios, sin recibos detallada — solo flujo de servicio + insumos.
 
 function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, proposals, setProposals, services, setServices, supplies, setSupplies, onMessageClient, canMessage = false, conversations = {}, onSendMessage, bookings: bookingsProp, setBookings: setBookingsProp, petUpdates = [], onSubmitPetUpdate, setPassports, userName, permissions = {}, modules = [], activeModule = null }) {
   const isAdmin = userRole === "super";
   // Modal flotante con calendario
   const [showCalendarModal, setShowCalendarModal] = useState(false);
+
+  // === Features y cardFields del módulo ===
+  // Valores con fallback a los defaults de Pet 1 para que cualquier instancia
+  // (clon, sede nueva, etc.) tenga paridad funcional por defecto. El admin puede
+  // sobreescribirlos desde "Configurar módulo".
+  const features = useMemo(() => ({
+    suppliesDuringService: true,
+    beforeAfterPhotos: true,
+    floatingCalendar: true,
+    chatWithTutor: true,
+    invoiceLink: true,
+    dragAndDrop: true,
+    ...(activeModule?.features || {}),
+  }), [activeModule]);
+
+  const cardFields = useMemo(() => ({
+    petName: true,
+    petCode: false,
+    breed: true,
+    age: false,
+    tutorName: true,
+    time: true,
+    invoiceNumber: true,
+    statusBadge: false,
+    ...(activeModule?.cardFields || {}),
+  }), [activeModule]);
 
   // === Override de columnas desde el módulo ===
   // Si nos pasaron un activeModule (clon como "Grooming 2"), leemos sus columnas.
@@ -20461,11 +25249,44 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
 
   const [activeBookingId, setActiveBookingId] = useState(null);
 
+  // === Barra de búsqueda y filtro por especie ===
+  const [groomSearch, setGroomSearch] = useState("");
+  const [groomSpecies, setGroomSpecies] = useState("all");
+
+  // Especies presentes en los bookings de hoy (para las pills)
+  const speciesList = useMemo(() => {
+    const counts = {};
+    bookings.forEach(b => {
+      const sp = b.species || "dog";
+      counts[sp] = (counts[sp] || 0) + 1;
+    });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [bookings]);
+
+  // Bookings filtrados por búsqueda + especie
+  const filteredBookings = useMemo(() => {
+    let result = bookings;
+    if (groomSpecies !== "all") {
+      result = result.filter(b => (b.species || "dog") === groomSpecies);
+    }
+    if (groomSearch.trim()) {
+      const q = groomSearch.toLowerCase().trim();
+      result = result.filter(b =>
+        (b.pet || "").toLowerCase().includes(q) ||
+        (b.breed || "").toLowerCase().includes(q) ||
+        (b.owner || "").toLowerCase().includes(q) ||
+        (b.service || "").toLowerCase().includes(q) ||
+        (b.petCode || "").includes(q)
+      );
+    }
+    return result;
+  }, [bookings, groomSearch, groomSpecies]);
+
   // === Drag & drop entre columnas (cambia status del booking) ===
   const [dragOverColumnId, setDragOverColumnId] = useState(null);
   const dragDataRef = useRef(null);
   // Pendiente de confirmación: cuando arrastran un booking a "Terminado" se abre un modal
-  // que pide confirmación antes de cerrar y emitir factura.
+  // que pide confirmación antes de cerrar y emitir recibo.
   const [pendingFinishBookingId, setPendingFinishBookingId] = useState(null);
 
   const handleDragStart = (e, bookingId, fromStatus) => {
@@ -20497,7 +25318,7 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
     if (data.fromStatus === columnId) return;
     // Si la card venía de "done", no permitir retroceso
     if (data.fromStatus === "done") return;
-    // Si va a "done": confirmar antes y emitir factura al confirmar
+    // Si va a "done": confirmar antes y emitir recibo al confirmar
     if (columnId === "done") {
       setPendingFinishBookingId(data.bookingId);
       return;
@@ -20505,7 +25326,7 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
     // Cualquier otra transición (pending↔active): aplicar directo
     setBookings(prev => prev.map(b => b.id === data.bookingId ? { ...b, status: columnId } : b));
   };
-  // Confirmar el cierre del servicio: marca como "done" y emite factura
+  // Confirmar el cierre del servicio: marca como "done" y emite recibo
   const confirmFinishBooking = () => {
     const id = pendingFinishBookingId;
     if (!id) return;
@@ -20516,7 +25337,7 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
     }
     // Marcar como done
     setBookings(prev => prev.map(b => b.id === id ? { ...b, status: "done" } : b));
-    // Emitir factura ligera con el servicio + insumos.
+    // Emitir recibo ligera con el servicio + insumos.
     // Detecta cliente del booking (mismo match que GroomingAttendanceDrawer).
     const norm = (s) => (s || "").toLowerCase().replace(/[.,]/g, "").trim();
     const target = norm(booking.owner);
@@ -20559,13 +25380,13 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
       const tax = Math.round(subtotal * 0.16 * 100) / 100;
       const total = Math.round((subtotal + tax) * 100) / 100;
 
-      // Si el booking ya viene asociado a una factura (vino desde venta express),
-      // ACTUALIZAMOS esa factura agregando los insumos al detalle. Si no, creamos una nueva.
+      // Si el booking ya viene asociado a una recibo (vino desde venta express),
+      // ACTUALIZAMOS esa recibo agregando los insumos al detalle. Si no, creamos una nueva.
       if (booking.invoiceId) {
         setInvoices(prev => prev.map(inv => {
           if (inv.id !== booking.invoiceId) return inv;
           // Conservamos los ítems originales y agregamos los insumos.
-          // Recalculamos totales. Si la factura ya estaba pagada por adelantado y no
+          // Recalculamos totales. Si la recibo ya estaba pagada por adelantado y no
           // hay insumos extra, queda como pagada. Si hay insumos, el saldo se vuelve
           // pendiente para cobrar la diferencia.
           const existingItems = inv.items || [];
@@ -20608,7 +25429,7 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
           };
         }));
       } else {
-        // Booking sin factura previa (creado manualmente en grooming) — emitir una nueva.
+        // Booking sin recibo previa (creado manualmente en grooming) — emitir una nueva.
         const newInvoice = {
           id: `inv-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,
           number: `00-${String(Date.now()).slice(-6)}`,
@@ -20681,9 +25502,9 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
   // Buckets por estado
   const byStatus = useMemo(() => {
     const r = { pending: [], active: [], done: [] };
-    bookings.forEach(b => { r[b.status]?.push(b); });
+    filteredBookings.forEach(b => { r[b.status]?.push(b); });
     return r;
-  }, [bookings]);
+  }, [filteredBookings]);
 
   const updateBooking = (id, updates) => {
     setBookings(prev => prev.map(b => b.id === id ? { ...b, ...updates } : b));
@@ -20746,7 +25567,7 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
           </div>
           <button
             onClick={() => setShowCalendarModal(true)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-emerald-300 text-emerald-700 text-sm font-semibold hover:bg-emerald-50 transition shadow-sm flex-shrink-0"
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-emerald-300 text-emerald-700 text-sm font-semibold hover:bg-emerald-50 transition shadow-sm flex-shrink-0 ${features.floatingCalendar === false ? "hidden" : ""}`}
             title="Ver calendario completo de citas grooming"
           >
             <Calendar size={14} /> Calendario
@@ -20769,6 +25590,85 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
             })}
           </div>
         </div>
+      </div>
+
+      {/* === Barra de búsqueda + filtros de especie === */}
+      <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-3 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+        {/* Buscador */}
+        <div className="relative flex-1 min-w-0">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+          <input
+            value={groomSearch}
+            onChange={(e) => setGroomSearch(e.target.value)}
+            placeholder="Buscar mascota, tutor, raza o servicio..."
+            className="w-full pl-9 pr-8 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-emerald-400 focus:bg-white transition"
+          />
+          {groomSearch && (
+            <button
+              onClick={() => setGroomSearch("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full bg-stone-200 hover:bg-stone-300 grid place-items-center text-stone-500 transition"
+            >
+              <X size={9} />
+            </button>
+          )}
+        </div>
+        {/* Filtros de especie */}
+        <div className="flex gap-1 flex-shrink-0 overflow-x-auto">
+          <button
+            onClick={() => setGroomSpecies("all")}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition border ${
+              groomSpecies === "all"
+                ? "bg-emerald-600 text-white border-emerald-600"
+                : "bg-white border-stone-200 text-stone-600 hover:border-emerald-300"
+            }`}
+          >
+            Todos
+            <span className={`text-[10px] font-bold px-1.5 py-px rounded-full ${
+              groomSpecies === "all" ? "bg-emerald-700 text-white" : "bg-stone-100 text-stone-600"
+            }`}>{bookings.length}</span>
+          </button>
+          {speciesList.map(([sp, count]) => {
+            const speciesInfo = {
+              dog: { label: "Perros", icon: "🐕" },
+              cat: { label: "Gatos", icon: "🐈" },
+              bird: { label: "Aves", icon: "🦜" },
+              rabbit: { label: "Conejos", icon: "🐇" },
+              hamster: { label: "Roedores", icon: "🐹" },
+              reptile: { label: "Reptiles", icon: "🦎" },
+            }[sp] || { label: sp, icon: "🐾" };
+            return (
+              <button
+                key={sp}
+                onClick={() => setGroomSpecies(sp)}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition border ${
+                  groomSpecies === sp
+                    ? "bg-emerald-600 text-white border-emerald-600"
+                    : "bg-white border-stone-200 text-stone-600 hover:border-emerald-300"
+                }`}
+              >
+                <span className="text-sm">{speciesInfo.icon}</span>
+                {speciesInfo.label}
+                <span className={`text-[10px] font-bold px-1.5 py-px rounded-full ${
+                  groomSpecies === sp ? "bg-emerald-700 text-white" : "bg-stone-100 text-stone-600"
+                }`}>{count}</span>
+              </button>
+            );
+          })}
+        </div>
+        {/* Indicador de filtro activo */}
+        {(groomSearch || groomSpecies !== "all") && (
+          <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-semibold flex-shrink-0">
+            <Filter size={11} />
+            {filteredBookings.length} de {bookings.length}
+            <button
+              onClick={() => { setGroomSearch(""); setGroomSpecies("all"); }}
+              className="ml-1 text-stone-400 hover:text-red-500 transition"
+              title="Limpiar filtros"
+            >
+              <X size={11} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Tres columnas con etapas */}
@@ -20809,12 +25709,12 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
                   list.map(b => (
                     <button
                       key={b.id}
-                      draggable={statusId !== "done"}
-                      onDragStart={(e) => statusId !== "done" && handleDragStart(e, b.id, statusId)}
+                      draggable={features.dragAndDrop !== false && statusId !== "done"}
+                      onDragStart={(e) => features.dragAndDrop !== false && statusId !== "done" && handleDragStart(e, b.id, statusId)}
                       onDragEnd={handleDragEnd}
                       onClick={() => openBooking(b.id)}
                       className={`w-full text-left bg-white border-2 ${colors.accent} rounded-xl p-3 hover:shadow-md transition ${
-                        statusId === "done" ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"
+                        features.dragAndDrop !== false && statusId !== "done" ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
                       }`}
                     >
                       <div className="flex items-center gap-2 mb-1.5">
@@ -20822,19 +25722,30 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
                           <PawPrint size={15} strokeWidth={1.8} />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className={`font-bold text-sm truncate ${!b.pet ? "text-amber-700 italic" : ""}`}>
-                            {b.pet || "Sin nombre"}
-                          </div>
-                          <div className="text-xs text-stone-500 truncate">{b.breed || (!b.pet ? "Pendiente: agregar nombre" : "")}</div>
+                          {cardFields.petName !== false && (
+                            <div className={`font-bold text-sm truncate ${!b.pet ? "text-amber-700 italic" : ""}`}>
+                              {b.pet || "Sin nombre"}
+                              {cardFields.petCode && b.petCode && (
+                                <span className="ml-1.5 font-mono text-xs text-emerald-700 font-bold">#{b.petCode}</span>
+                              )}
+                            </div>
+                          )}
+                          {cardFields.breed !== false && (
+                            <div className="text-xs text-stone-500 truncate">{b.breed || (!b.pet ? "Pendiente: agregar nombre" : "")}</div>
+                          )}
                         </div>
-                        <span className="font-mono text-xs font-bold text-stone-700 bg-stone-100 px-2 py-1 rounded">
-                          {b.time}
-                        </span>
+                        {cardFields.time !== false && (
+                          <span className="font-mono text-xs font-bold text-stone-700 bg-stone-100 px-2 py-1 rounded">
+                            {b.time}
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs font-semibold text-stone-700 mb-1">{b.service}</div>
-                      <div className="text-xs text-stone-500 truncate">{b.owner}</div>
-                      {/* Número de factura asociado (hilo conductor con Ventas) */}
-                      {b.invoiceNumber && (
+                      {cardFields.tutorName !== false && (
+                        <div className="text-xs text-stone-500 truncate">{b.owner}</div>
+                      )}
+                      {/* Número de recibo asociado (hilo conductor con Ventas) */}
+                      {cardFields.invoiceNumber !== false && b.invoiceNumber && (
                         <div className="mt-1.5 flex items-center gap-1 text-xs text-orange-700 font-mono font-semibold">
                           <Receipt size={11} strokeWidth={2} />
                           {b.invoiceNumber}
@@ -20908,7 +25819,7 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
         <GroomingCalendarModal onClose={() => setShowCalendarModal(false)} />
       )}
 
-      {/* Confirmación al arrastrar a "Terminado": cierra servicio + emite factura */}
+      {/* Confirmación al arrastrar a "Terminado": cierra servicio + emite recibo */}
       {pendingFinishBookingId && (() => {
         const b = bookings.find(x => x.id === pendingFinishBookingId);
         if (!b) return null;
@@ -20922,7 +25833,7 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
                 <div className="flex-1 min-w-0">
                   <h3 className="font-serif text-lg font-bold leading-tight">¿Terminar servicio de {b.pet}?</h3>
                   <p className="text-xs text-stone-500 mt-1 leading-relaxed">
-                    Marcar como terminado <strong>cierra el servicio</strong> y <strong>emite una factura</strong>{" "}
+                    Marcar como terminado <strong>cierra el servicio</strong> y <strong>emite una recibo</strong>{" "}
                     automáticamente. Una vez en "Terminado" no se puede regresar a otra etapa.
                   </p>
                 </div>
@@ -20954,7 +25865,7 @@ function GroomingOpsView({ clients, passports, invoices, setInvoices, userRole, 
                   onClick={confirmFinishBooking}
                   className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow transition flex items-center justify-center gap-1.5"
                 >
-                  <Check size={14} strokeWidth={2.4} /> Sí, terminar y facturar
+                  <Check size={14} strokeWidth={2.4} /> Sí, terminar y cobrar
                 </button>
               </div>
             </div>
@@ -21296,7 +26207,7 @@ function GroomingCatalogManager({ services, setServices, supplies, setSupplies }
               Catálogo de <span className="italic text-orange-700">grooming</span>
             </h2>
             <p className="text-sm text-stone-600 mt-1">
-              Gestiona los servicios disponibles y los insumos que el groomer puede usar (con sus precios internos para facturación).
+              Gestiona los servicios disponibles y los insumos que el groomer puede usar (con sus precios internos para recibos).
             </p>
           </div>
         </div>
@@ -21677,7 +26588,7 @@ function GroomingAttendanceDrawer({
     return null;
   }, [booking.owner, clients]);
 
-  // Facturas abiertas (borrador o emitido) del cliente
+  // Recibos abiertas (borrador o emitido) del cliente
   const openInvoices = useMemo(() => {
     if (!matchedClient) return [];
     return invoices.filter(inv =>
@@ -21790,6 +26701,41 @@ function GroomingAttendanceDrawer({
       e.preventDefault();
       handleChatSend();
     }
+  };
+
+  // === Adjuntos del chat (foto / recibo) ===
+  // Menú "+" del composer y sus modales. Mismo patrón que la consola
+  // veterinaria y el módulo de Mensajes.
+  const [showChatAttachMenu, setShowChatAttachMenu] = useState(false);
+  const [showChatImagePicker, setShowChatImagePicker] = useState(false);
+  const [showChatInvoicePicker, setShowChatInvoicePicker] = useState(false);
+  // Permiso de enviar recibo por chat — específico del CRM Grooming. Se
+  // resuelve contra el CRM "grooming" (no transversal): cada CRM controla su
+  // propio envío de recibos. Las fotos no requieren este permiso.
+  const canSendInvoice = showField("service", "send-invoice");
+
+  const handleChatSendImage = (imageDataUrl, caption = "") => {
+    if (!matchedClient || !onSendMessage) return;
+    const body = caption || "📎 Imagen adjunta";
+    onSendMessage(matchedClient.id, chatChannel, body, {
+      attachment: { type: "image", url: imageDataUrl, caption },
+    });
+    setShowChatImagePicker(false);
+    setShowChatAttachMenu(false);
+  };
+  const handleChatSendInvoice = (inv, messageText = null) => {
+    if (!matchedClient || !onSendMessage) return;
+    // Defensa en profundidad: sin permiso no se envía aunque se invoque.
+    if (!canSendInvoice) return;
+    if (messageText) {
+      onSendMessage(matchedClient.id, chatChannel, messageText);
+    }
+    const body = `📄 Recibo ${inv.number} · $${(inv.total ?? 0).toFixed(2)}`;
+    onSendMessage(matchedClient.id, chatChannel, body, {
+      attachment: { type: "invoice", invoiceId: inv.id },
+    });
+    setShowChatInvoicePicker(false);
+    setShowChatAttachMenu(false);
   };
 
   return (
@@ -21978,6 +26924,65 @@ function GroomingAttendanceDrawer({
 
               {/* Composer */}
               <div className="p-2 border-t border-stone-200 bg-white flex-shrink-0 flex items-end gap-2">
+                {/* Botón "+" para adjuntar foto o recibo. La opción "Recibo"
+                    depende del permiso send-invoice del CRM Grooming; "Foto"
+                    siempre está disponible (para mostrarle al tutor cómo va
+                    quedando su mascota). */}
+                <div className="relative flex-shrink-0">
+                  <button
+                    onClick={() => setShowChatAttachMenu(v => !v)}
+                    disabled={!canMessage}
+                    title="Adjuntar"
+                    className={`w-9 h-9 rounded-xl grid place-items-center transition ${
+                      !canMessage
+                        ? "bg-stone-100 text-stone-300 cursor-not-allowed"
+                        : showChatAttachMenu
+                          ? "bg-emerald-500 text-white rotate-45"
+                          : "bg-stone-100 hover:bg-stone-200 text-stone-600"
+                    }`}
+                  >
+                    <Plus size={14} />
+                  </button>
+                  {showChatAttachMenu && canMessage && (
+                    <>
+                      <div onClick={() => setShowChatAttachMenu(false)} className="fixed inset-0 z-30"></div>
+                      <div className="absolute left-0 bottom-full mb-2 w-56 bg-white border border-stone-200 rounded-xl shadow-2xl z-40 overflow-hidden">
+                        <button
+                          onClick={() => { setShowChatAttachMenu(false); setShowChatImagePicker(true); }}
+                          className={`w-full flex items-start gap-2.5 p-3 hover:bg-emerald-50 transition text-left ${
+                            canSendInvoice ? "border-b border-stone-100" : ""
+                          }`}
+                        >
+                          <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 grid place-items-center flex-shrink-0">
+                            <Camera size={13} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-sm">Foto</div>
+                            <div className="text-xs text-stone-500 leading-snug">
+                              Muéstrale al tutor cómo va quedando.
+                            </div>
+                          </div>
+                        </button>
+                        {canSendInvoice && (
+                          <button
+                            onClick={() => { setShowChatAttachMenu(false); setShowChatInvoicePicker(true); }}
+                            className="w-full flex items-start gap-2.5 p-3 hover:bg-emerald-50 transition text-left"
+                          >
+                            <div className="w-8 h-8 rounded-lg bg-orange-100 text-orange-700 grid place-items-center flex-shrink-0">
+                              <Receipt size={13} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-sm">Recibo</div>
+                              <div className="text-xs text-stone-500 leading-snug">
+                                Comparte cualquier recibo existente.
+                              </div>
+                            </div>
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
                 <textarea
                   value={chatDraft}
                   onChange={(e) => setChatDraft(e.target.value)}
@@ -22060,7 +27065,7 @@ function GroomingAttendanceDrawer({
             <div className="text-xs text-stone-600 mt-1">
               {booking.breed || (booking.pet ? "" : "")} · <span className="font-mono">{booking.time}</span>
               {booking.invoiceNumber && (
-                <> · <span className="font-mono text-orange-700">Factura {booking.invoiceNumber}</span></>
+                <> · <span className="font-mono text-orange-700">Recibo {booking.invoiceNumber}</span></>
               )}
             </div>
           </div>
@@ -22096,6 +27101,38 @@ function GroomingAttendanceDrawer({
               )}
             </div>
           </div>
+
+          {/* === Mascota (editable) === */}
+          {/* Misma sección que en el drawer de Vet — permite editar datos del
+              pasaporte directamente desde grooming. Solo se renderiza si hay
+              pasaporte vinculado al booking. */}
+          {matchedPassport && (
+            <div className="bg-white border border-stone-200 rounded-xl overflow-hidden">
+              <PetEditableSection
+                patient={{
+                  name: matchedPassport.name,
+                  code: matchedPassport.code,
+                  species: matchedPassport.species,
+                  breed: matchedPassport.breed,
+                  age: matchedPassport.age,
+                  gender: matchedPassport.gender,
+                }}
+                passport={matchedPassport}
+                onUpdatePassport={canEditField("service", "edit-pet") ? (updates) => {
+                  setPassports && setPassports(prev => prev.map(p =>
+                    p.code === matchedPassport.code ? { ...p, ...updates } : p
+                  ));
+                  // También sincronizar campos del booking si cambiaron
+                  if (onUpdateBooking && (updates.name !== matchedPassport.name || updates.breed !== matchedPassport.breed)) {
+                    onUpdateBooking({
+                      ...(updates.name && { pet: updates.name }),
+                      ...(updates.breed && { breed: updates.breed }),
+                    });
+                  }
+                } : null}
+              />
+            </div>
+          )}
 
           {/* Ficha del tutor — datos administrativos.
               Cada campo se muestra/oculta según los permisos por CRM definidos en Roles. */}
@@ -22294,7 +27331,7 @@ function GroomingAttendanceDrawer({
         />
       )}
 
-      {/* Modal de finalización (decide cómo facturar) */}
+      {/* Modal de finalización (decide cómo cobrar) */}
       {showFinishModal && (
         <FinishGroomingModal
           booking={booking}
@@ -22323,6 +27360,23 @@ function GroomingAttendanceDrawer({
           onSubmitUpdate={onSubmitPetUpdate}
           userName={userName}
           userRole={userRole}
+        />
+      )}
+
+      {/* === Modales de adjuntos del chat === */}
+      {showChatImagePicker && (
+        <ChatImagePickerModal
+          onClose={() => setShowChatImagePicker(false)}
+          onSend={handleChatSendImage}
+        />
+      )}
+      {showChatInvoicePicker && matchedClient && canSendInvoice && (
+        <ChatInvoicePickerModal
+          invoices={invoices}
+          activeClientId={matchedClient.id}
+          clients={clients}
+          onClose={() => setShowChatInvoicePicker(false)}
+          onSend={handleChatSendInvoice}
         />
       )}
     </>
@@ -22383,7 +27437,7 @@ function PetMiniProfileModal({ pet, fallbackBooking, matchedClient, setPassports
   const [draft, setDraft] = useState(null);
   // Modo "crear pasaporte" — disponible solo cuando NO hay pet real (isRealPet === false).
   // El groomer rellena los datos básicos y se persiste un pasaporte nuevo, vinculado
-  // al cliente actual (matchedClient) y a la factura/booking. Esto resuelve el caso
+  // al cliente actual (matchedClient) y a la recibo/booking. Esto resuelve el caso
   // de venta express donde Sales no registró la mascota.
   const [createMode, setCreateMode] = useState(false);
 
@@ -22416,7 +27470,7 @@ function PetMiniProfileModal({ pet, fallbackBooking, matchedClient, setPassports
   };
 
   // Persistir un pasaporte nuevo. Calcula código único, agrega al cliente vinculado
-  // (en su array petCodes) y enlaza al booking (booking.petCode = code) y a la factura
+  // (en su array petCodes) y enlaza al booking (booking.petCode = code) y a la recibo
   // si tenía petCode null. Después cierra el modal.
   const submitCreate = () => {
     if (!draft || !draft.name?.trim() || !setPassports || !matchedClient) return;
@@ -22427,15 +27481,27 @@ function PetMiniProfileModal({ pet, fallbackBooking, matchedClient, setPassports
       code,
       name: draft.name.trim(),
       species: draft.species || "dog",
+      speciesOther: draft.speciesOther || "",
       breed: draft.breed.trim() || "—",
       age: draft.age.trim() || null,
       gender: draft.gender || null,
       sterilized: !!draft.sterilized,
       weight: draft.weight.trim() || null,
       color: draft.color.trim() || null,
+      microchip: draft.microchip || "",
+      birthdate: draft.birthdate || null,
+      photo: null,
+      // Campos clínicos de la ficha extendida — inicializados vacíos para que
+      // FichaClinicaCard pueda editarlos sin tener que crear el campo on-the-fly.
+      allergies: "",
+      chronicConditions: "",
+      diet: "",
+      behavior: "",
+      notes: "",
       // Vincular al cliente actual como tutor principal
       tutors: [{ id: matchedClient.id, name: matchedClient.name, relation: "Tutor" }],
       // Histórico vacío (recién creado)
+      events: [],
       vaccinations: [],
       medications: [],
       visits: [],
@@ -22456,7 +27522,7 @@ function PetMiniProfileModal({ pet, fallbackBooking, matchedClient, setPassports
       });
     }
 
-    // Si la factura asociada tenía petCode null, actualizar también para trazabilidad
+    // Si la recibo asociada tenía petCode null, actualizar también para trazabilidad
     if (setInvoices && fallbackBooking?.invoiceId) {
       setInvoices(prev => prev.map(inv =>
         inv.id === fallbackBooking.invoiceId
@@ -22563,7 +27629,7 @@ function PetMiniProfileModal({ pet, fallbackBooking, matchedClient, setPassports
             <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-start gap-2 text-xs text-emerald-900">
               <Info size={12} className="flex-shrink-0 mt-0.5 text-emerald-700" />
               <span>
-                Crearás un pasaporte nuevo para esta mascota. El tutor <strong>{matchedClient?.name}</strong> ya está asignado por la factura.
+                Crearás un pasaporte nuevo para esta mascota. El tutor <strong>{matchedClient?.name}</strong> ya está asignado por la recibo.
               </span>
             </div>
 
@@ -23087,18 +28153,18 @@ function SupplyPickerModal({ onClose, onAdd, alreadyAdded = [], supplies = GROOM
   );
 }
 
-// === Modal de finalización: decidir cómo se factura ===
+// === Modal de finalización: decidir cómo se recibo ===
 function FinishGroomingModal({
   booking, matchedClient, openInvoices, setProposals, setInvoices, userRole, userName,
   onClose, onConfirm
 }) {
   // Caso especial: si NO hay insumos, el flujo es muy simple. El groomer no decide
-  // cómo facturar — solo notifica a Ventas que terminó. Si el cliente ya pagó al
+  // cómo cobrar — solo notifica a Ventas que terminó. Si el cliente ya pagó al
   // reservar, no hay cargos nuevos; si no, Ventas hace el cobro.
   const hasSupplies = (booking.supplies || []).length > 0;
 
   // Sin insumos: el choice queda fijado a "notify-completion" automáticamente.
-  // Con insumos: el groomer elige entre las dos opciones de facturación.
+  // Con insumos: el groomer elige entre las dos opciones de recibos.
   const [choice, setChoice] = useState(hasSupplies ? null : "notify-completion");
   const [targetInvoiceId, setTargetInvoiceId] = useState(openInvoices[0]?.id || null);
 
@@ -23112,7 +28178,7 @@ function FinishGroomingModal({
 
     // === RAMA notify-completion: solo notifica el cierre, sin items ===
     // Ventas la recibe como una propuesta liviana. Si el cliente ya pagó al reservar,
-    // se archiva sin cambios. Si no, Ventas crea factura y cobra.
+    // se archiva sin cambios. Si no, Ventas crea recibo y cobra.
     if (choice === "notify-completion") {
       const proposal = {
         id: `prop-${Date.now().toString(36)}`,
@@ -23193,7 +28259,7 @@ function FinishGroomingModal({
             <Info size={13} className="text-blue-700 flex-shrink-0 mt-0.5" />
             <div>
               {hasSupplies ? (
-                <>Esta solicitud se enviará al equipo de <strong>Ventas</strong> para revisión y facturación. Tú no manejas precios.</>
+                <>Esta solicitud se enviará al equipo de <strong>Ventas</strong> para revisión y recibos. Tú no manejas precios.</>
               ) : (
                 <>El servicio se marcará como <strong>terminado</strong>. Ventas recibirá el aviso: si el cliente ya pagó al reservar, no hay cargos nuevos; si no, Ventas se encarga del cobro.</>
               )}
@@ -23207,7 +28273,7 @@ function FinishGroomingModal({
             </div>
           )}
 
-          {/* Opción 1: Agregar a factura existente — solo cuando hay insumos */}
+          {/* Opción 1: Agregar a recibo existente — solo cuando hay insumos */}
           {hasSupplies && openInvoices.length > 0 && (
             <button
               onClick={() => setChoice("add-to-invoice")}
@@ -23224,9 +28290,9 @@ function FinishGroomingModal({
                   <Receipt size={15} />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm">Sumar a factura existente</div>
+                  <div className="font-semibold text-sm">Sumar a recibo existente</div>
                   <div className="text-xs text-stone-500 mt-0.5">
-                    El cliente tiene {openInvoices.length} factura{openInvoices.length === 1 ? "" : "s"} abierta{openInvoices.length === 1 ? "" : "s"}.
+                    El cliente tiene {openInvoices.length} recibo{openInvoices.length === 1 ? "" : "s"} abierta{openInvoices.length === 1 ? "" : "s"}.
                   </div>
                   {choice === "add-to-invoice" && openInvoices.length > 1 && (
                     <select
@@ -23244,7 +28310,7 @@ function FinishGroomingModal({
                   )}
                   {choice === "add-to-invoice" && openInvoices.length === 1 && (
                     <div className="mt-2 text-xs font-mono font-bold text-blue-700">
-                      Factura {openInvoices[0].number}
+                      Recibo {openInvoices[0].number}
                     </div>
                   )}
                 </div>
@@ -23252,7 +28318,7 @@ function FinishGroomingModal({
             </button>
           )}
 
-          {/* Opción 2: Crear factura nueva — solo cuando hay insumos */}
+          {/* Opción 2: Crear recibo nueva — solo cuando hay insumos */}
           {hasSupplies && (
           <button
             onClick={() => setChoice("new-invoice")}
@@ -23269,7 +28335,7 @@ function FinishGroomingModal({
                 <Plus size={15} />
               </div>
               <div className="flex-1 min-w-0">
-                <div className="font-semibold text-sm">Solicitar factura nueva</div>
+                <div className="font-semibold text-sm">Solicitar recibo nueva</div>
                 <div className="text-xs text-stone-500 mt-0.5">
                   Para el tutor de {booking.pet}, con servicio + insumos.
                 </div>
@@ -23350,7 +28416,7 @@ function FinishGroomingModal({
   );
 }
 
-// ========== MODAL: PROPUESTAS DE FACTURACIÓN (revisión por Ventas) ==========
+// ========== MODAL: PROPUESTAS DE RECIBOS (revisión por Ventas) ==========
 
 function ProposalsReviewModal({ proposals, setProposals, clients, invoices, setInvoices, services = INITIAL_SERVICES, onClose }) {
   const [activeProposalId, setActiveProposalId] = useState(null);
@@ -23359,7 +28425,7 @@ function ProposalsReviewModal({ proposals, setProposals, clients, invoices, setI
 
   const activeProposal = proposals.find(p => p.id === activeProposalId);
 
-  // Aprobar: convierte la propuesta en factura (nueva o agregando a existente)
+  // Aprobar: convierte la propuesta en recibo (nueva o agregando a existente)
   const approveProposal = (proposal, decision) => {
     // decision: { action: 'add-to-invoice'|'new-invoice', targetInvoiceId, clientId }
     const supplyItems = (proposal.items || []).map(it => {
@@ -23387,7 +28453,7 @@ function ProposalsReviewModal({ proposals, setProposals, clients, invoices, setI
           tax: newTax,
           total: newTotal,
           balance: newTotal - inv.paid,
-          // Marca distintiva: factura modificada por propuesta aprobada
+          // Marca distintiva: recibo modificada por propuesta aprobada
           modifiedByProposal: {
             proposalId: proposal.id,
             sourceModule: proposal.sourceModule,
@@ -23467,7 +28533,7 @@ function ProposalsReviewModal({ proposals, setProposals, clients, invoices, setI
               Bandeja de revisión
             </div>
             <h3 className="font-serif text-xl font-semibold mt-0.5">
-              Propuestas de facturación
+              Propuestas de recibos
             </h3>
             <div className="text-xs text-stone-500 mt-0.5">
               {pending.length} pendiente{pending.length === 1 ? "" : "s"} de aprobación
@@ -23576,9 +28642,9 @@ function ProposalCard({ proposal, onClick, compact }) {
             <div className="text-xs text-stone-500 mt-1">
               {itemCount > 0 && <>{itemCount} insumo{itemCount === 1 ? "" : "s"} · </>}
               {proposal.target === "add-to-invoice"
-                ? <>Sugerencia: agregar a factura existente</>
+                ? <>Sugerencia: agregar a recibo existente</>
                 : proposal.target === "new-invoice"
-                  ? <>Sugerencia: factura nueva</>
+                  ? <>Sugerencia: recibo nueva</>
                   : proposal.target === "notify-completion"
                     ? <span className="font-semibold text-blue-700">Aviso: servicio concluido (sin insumos)</span>
                     : null
@@ -23611,7 +28677,7 @@ function ProposalDetailReview({ proposal, clients, invoices, onBack, onApprove, 
     );
   }, [selectedClientId, invoices]);
 
-  // Si la sugerencia era "add-to-invoice" pero no hay facturas abiertas, forzar new-invoice
+  // Si la sugerencia era "add-to-invoice" pero no hay recibos abiertas, forzar new-invoice
   useEffect(() => {
     if (action === "add-to-invoice" && clientOpenInvoices.length === 0) {
       setAction("new-invoice");
@@ -23624,7 +28690,7 @@ function ProposalDetailReview({ proposal, clients, invoices, onBack, onApprove, 
     if (!clientSearch.trim()) return clients.slice(0, 8);
     const q = clientSearch.toLowerCase();
     return clients.filter(c =>
-      c.name.toLowerCase().includes(q) ||
+      (c.name || "").toLowerCase().includes(q) ||
       (c.cedula || "").toLowerCase().includes(q)
     ).slice(0, 12);
   }, [clientSearch, clients]);
@@ -23774,7 +28840,7 @@ function ProposalDetailReview({ proposal, clients, invoices, onBack, onApprove, 
       {selectedClient && (
         <div className="bg-white border border-stone-200 rounded-xl p-3">
           <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold mb-2">
-            ¿Cómo facturar?
+            ¿Cómo cobrar?
           </div>
           <div className="space-y-2">
             {clientOpenInvoices.length > 0 && (
@@ -23786,7 +28852,7 @@ function ProposalDetailReview({ proposal, clients, invoices, onBack, onApprove, 
                     : "bg-white border-stone-200 hover:border-stone-400"
                 }`}
               >
-                <div className="font-semibold text-sm">Sumar a factura abierta</div>
+                <div className="font-semibold text-sm">Sumar a recibo abierta</div>
                 <div className="text-xs text-stone-500 mt-0.5">
                   Se marcará con cinta visual indicando el aumento.
                 </div>
@@ -23814,7 +28880,7 @@ function ProposalDetailReview({ proposal, clients, invoices, onBack, onApprove, 
                   : "bg-white border-stone-200 hover:border-stone-400"
               }`}
             >
-              <div className="font-semibold text-sm">Crear factura nueva</div>
+              <div className="font-semibold text-sm">Crear recibo nueva</div>
               <div className="text-xs text-stone-500 mt-0.5">
                 Para clientes que pagan al finalizar o por adelantado.
               </div>
@@ -23840,7 +28906,7 @@ function ProposalDetailReview({ proposal, clients, invoices, onBack, onApprove, 
               : "bg-stone-200 text-stone-400 cursor-not-allowed"
           }`}
         >
-          <Check size={13} className="inline" strokeWidth={2.5} /> Aprobar y facturar
+          <Check size={13} className="inline" strokeWidth={2.5} /> Aprobar y cobrar
         </button>
       </div>
     </div>
@@ -23849,26 +28915,77 @@ function ProposalDetailReview({ proposal, clients, invoices, onBack, onApprove, 
 
 // ========== VISTA: BANDEJA DE MENSAJES (módulo completo) ==========
 
-function MessagesView({ clients, setClients, passports = [], setPassports, conversations, onSendMessage, invoices = [], onGoToInvoice }) {
+function MessagesView({ clients, setClients, passports = [], setPassports, conversations, onSendMessage, invoices = [], setInvoices, onGoToInvoice, user = null, userRole = "super", permissions = {}, agendaEvents = [], setAgendaEvents, modules = [], sedes = [], services = [], groomingBookings = [], setGroomingBookings, msgTemplate = {}, setMsgTemplate, onOpenMsgConfig, paymentMethods = [] }) {
+  // ¿Puede el usuario configurar la plantilla global de mensajes?
+  const canConfigMsgTemplate = userRole === "super" || getFieldLevel(permissions, userRole, "clients", "messaging", "msg-config") !== "hidden";
+  // Filtrar conversaciones por sede del usuario. Si el usuario tiene sedeIds restringidos,
+  // solo ve conversaciones de clientes cuya sedeOrigenId esté en sus sedes (o sin sede = legacy).
+  // El super (sedeIds vacío) ve todas. Esto se hace ANTES de pasar conversations al render.
+  const filteredConversations = useMemo(() => {
+    if (userRole === "super" || !user?.sedeIds || user.sedeIds.length === 0) {
+      return conversations;
+    }
+    // Estricto: solo clientes con sedeOrigenId explícito en las sedes del usuario.
+    // Los clientes sin sedeOrigenId (legacy) NO son accesibles para roles con sede.
+    const allowedClientIds = new Set(
+      clients.filter(c => c.sedeOrigenId && user.sedeIds.includes(c.sedeOrigenId))
+        .map(c => c.id)
+    );
+    const filtered = {};
+    Object.keys(conversations || {}).forEach(key => {
+      if (allowedClientIds.has(key)) filtered[key] = conversations[key];
+    });
+    return filtered;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversations, clients, user, userRole]);
+
+  // Reemplaza `conversations` por la versión filtrada en todo el cuerpo
+  conversations = filteredConversations;
   const [activeClientId, setActiveClientId] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [channelFilter, setChannelFilter] = useState("all"); // all | whatsapp | instagram | facebook | web
   const [draft, setDraft] = useState("");
   const [activeChannel, setActiveChannel] = useState("whatsapp");
 
-  // Menú "+" del input (foto / factura)
+  // Menú "+" del input (foto / recibo)
   const [showAttachMenu, setShowAttachMenu] = useState(false);
-  // Modal de selector de imagen y modal selector de factura
+  // Modal de selector de imagen y modal selector de recibo
   const [showImagePicker, setShowImagePicker] = useState(false);
   const [showInvoicePicker, setShowInvoicePicker] = useState(false);
+  // Modal de selector de método de pago para enviar datos al cliente
+  const [showPaymentPicker, setShowPaymentPicker] = useState(false);
   // Menú "..." del header del chat
   const [showHeaderMenu, setShowHeaderMenu] = useState(false);
   // Modal: vincular cliente desde chat (cuando es visitante / sin cliente)
   const [showLinkClient, setShowLinkClient] = useState(false);
-  // Pestañas de facturas abiertas con detalle dentro del chat
+  // Modal para asociar recibos existentes al cliente del chat actual.
+  // Útil cuando el cliente tiene varios números de teléfono o creó recibos
+  // como visitante antes de asociar el chat.
+  const [showAssociateInvoice, setShowAssociateInvoice] = useState(false);
+  const [associateSearch, setAssociateSearch] = useState("");
+  // === Panel lateral de ficha (cliente o mascota) sobre el chat ===
+  // Se abre desde los botones del header sin salir de la conversación.
+  // null = cerrado, "client" = ficha del tutor, "pet" = ficha de mascota
+  const [sidePanelTab, setSidePanelTab] = useState(null);
+  // Si hay varias mascotas, dejamos al usuario elegir cuál ver
+  const [sidePanelPetCode, setSidePanelPetCode] = useState(null);
+  // Pestañas de recibos abiertas con detalle dentro del chat
   // Cada tab tiene { id, invoiceId } — no se persisten más allá de la sesión
   const [openInvoiceTabs, setOpenInvoiceTabs] = useState([]); // [{ id, invoiceId }]
   const [activeInvoiceTabId, setActiveInvoiceTabId] = useState(null);
+
+  // === Ventana flotante "Agendar cita" ===
+  // Se mantiene abierta mientras se sigue conversando. El usuario puede
+  // chatear y llenar el formulario al mismo tiempo.
+  const [showAppointmentFloat, setShowAppointmentFloat] = useState(false);
+  // Cuando se abre desde "Configurar mensaje" en el menú, la ventana flotante
+  // arranca con el panel de configuración expandido.
+  const [appointmentAutoConfig, setAppointmentAutoConfig] = useState(false);
+
+  // Filtro por sede. Los usuarios no-super solo ven clientes de sus sedes
+  // (se aplica siempre, sin toggle). El super ve todo por defecto y tiene
+  // pills para filtrar voluntariamente.
+  const [sedeFilter, setSedeFilter] = useState("all"); // "all" | sedeId
 
   // Construir lista de conversaciones con metadata útil
   const conversationsList = useMemo(() => {
@@ -23896,9 +29013,24 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
     return list.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   }, [conversations, clients]);
 
-  // Filtrado
+  // Filtrado (canal + búsqueda + sede)
+  const isSuper = userRole === "super";
+  const userSedeIds = user?.sedeIds || [];
   const filtered = useMemo(() => {
     let r = conversationsList;
+    // === Filtro por sede ===
+    // Non-super: solo ven clientes de sus propias sedes (user.sedeIds).
+    // Un array vacío = "todas las sedes" (legacy, igual que super).
+    if (!isSuper && userSedeIds.length > 0) {
+      r = r.filter(c => {
+        const clientSede = c.client.sedeOrigenId;
+        return !clientSede || userSedeIds.includes(clientSede);
+      });
+    }
+    // Super: filtro voluntario por sede (pills).
+    if (isSuper && sedeFilter !== "all") {
+      r = r.filter(c => c.client.sedeOrigenId === sedeFilter);
+    }
     if (channelFilter !== "all") {
       r = r.filter(c => c.channels.includes(channelFilter));
     }
@@ -23911,7 +29043,7 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
       );
     }
     return r;
-  }, [conversationsList, channelFilter, searchQuery]);
+  }, [conversationsList, channelFilter, searchQuery, sedeFilter, isSuper, userSedeIds]);
 
   const activeConvo = filtered.find(c => c.client.id === activeClientId)
     || conversationsList.find(c => c.client.id === activeClientId);
@@ -23941,7 +29073,7 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
     setDraft("");
   };
 
-  // Enviar adjunto: imagen o factura (estos requieren un onSendMessage extendido en el padre,
+  // Enviar adjunto: imagen o recibo (estos requieren un onSendMessage extendido en el padre,
   // pero para que sea robusto enviamos un body de texto que represente el adjunto)
   const handleSendImage = (imageDataUrl, caption = "") => {
     if (!activeConvo) return;
@@ -23952,9 +29084,16 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
     setShowImagePicker(false);
     setShowAttachMenu(false);
   };
-  const handleSendInvoice = (invoice) => {
+  const handleSendInvoice = (invoice, messageText = null) => {
     if (!activeConvo) return;
-    const body = `📄 Factura ${invoice.number} · $${(invoice.total ?? 0).toFixed(2)}`;
+    // Si hay mensaje de acompañamiento, lo enviamos como mensaje separado PRIMERO
+    // (así aparece arriba de la recibo adjunta en la conversación)
+    if (messageText) {
+      onSendMessage(activeConvo.client.id, activeChannel, messageText);
+    }
+    // Enviamos la recibo como adjunto. El "body" textual es solo fallback;
+    // la UI del chat renderiza el adjunto como documento embebido.
+    const body = `📄 Recibo ${invoice.number} · $${(invoice.total ?? 0).toFixed(2)}`;
     onSendMessage(activeConvo.client.id, activeChannel, body, {
       attachment: { type: "invoice", invoiceId: invoice.id }
     });
@@ -23982,10 +29121,19 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
     });
   };
 
-  // Facturas asociadas al cliente activo (por clientId)
+  // Recibos asociadas al cliente activo:
+  // - Las que tienen clientId === este cliente (su dueño original)
+  // - Las que están vinculadas vía linkedClientIds (vínculo manual creado desde el chat)
+  // Los vínculos no transfieren la recibo, solo la hacen visible aquí. La recibo
+  // original sigue perteneciendo a su clientId. Esto preserva la fuente de verdad y
+  // permite que la misma recibo aparezca en varias fichas (ej. cliente con dos teléfonos).
   const activeClientInvoices = useMemo(() => {
     if (!activeConvo) return [];
-    return invoices.filter(inv => inv.clientId === activeConvo.client.id);
+    const cid = activeConvo.client.id;
+    return invoices.filter(inv =>
+      inv.clientId === cid ||
+      (Array.isArray(inv.linkedClientIds) && inv.linkedClientIds.includes(cid))
+    );
   }, [invoices, activeConvo]);
 
   // Vincular cliente real al chat (cuando es visitante)
@@ -24025,6 +29173,7 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
         code: petCode,
         name: data.pet.name,
         species: data.pet.species || "dog",
+        speciesOther: data.pet.speciesOther || "",
         breed: data.pet.breed || "—",
         age: data.pet.age || "—",
         weight: null,
@@ -24034,7 +29183,15 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
         microchip: "",
         birthdate: null,
         photo: null,
+        // Campos clínicos de la ficha extendida — inicializados vacíos para
+        // que FichaClinicaCard pueda editarlos.
+        allergies: "",
+        chronicConditions: "",
+        diet: "",
+        behavior: "",
+        notes: "",
         tutors: [{ clientId: newClientId, name: data.name, phone: newClient.phone, documentId: data.documentId, primary: true }],
+        events: [],
         clinicHistory: [],
         vaccines: [],
         medications: [],
@@ -24050,52 +29207,37 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
 
   return (
     <div className="space-y-4">
-      {/* Hero con KPIs */}
-      <div className="relative p-6 rounded-2xl bg-gradient-to-br from-white via-emerald-50 to-emerald-100 border border-stone-200 overflow-hidden">
-        <div className="flex items-center gap-4 flex-wrap">
-          <div className="flex-1 min-w-0">
-            <div className="text-xs tracking-widest uppercase text-emerald-700 font-semibold mb-1">
-              Comunicación · Multicanal
-            </div>
-            <h2 className="font-serif text-3xl font-semibold leading-tight">
-              <span className="text-emerald-700">{stats.total}</span> conversaciones activas
-            </h2>
-            <p className="text-sm text-stone-600 mt-1 max-w-xl">
-              Bandeja unificada con WhatsApp, Instagram, Facebook Messenger y chat web.
-            </p>
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            {stats.unread > 0 && (
-              <div className="px-5 py-3 rounded-xl text-center min-w-20 bg-emerald-600 text-white">
-                <div className="text-xs tracking-widest uppercase font-semibold text-white">Sin responder</div>
-                <div className="font-serif text-2xl font-semibold leading-none mt-1">{stats.unread}</div>
-              </div>
-            )}
-            <div className="px-5 py-3 rounded-xl text-center min-w-20 bg-white border border-stone-200">
-              <div className="text-xs tracking-widest uppercase font-semibold text-stone-500">Esta semana</div>
-              <div className="font-serif text-2xl font-semibold leading-none mt-1">{stats.total}</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Layout principal: lista a la izquierda, conversación a la derecha */}
+      {/* Layout principal: lista a la izquierda, conversación a la derecha.
+          Altura adaptable: en mobile fuerza 75vh con mínimo de 500px para que el
+          composer (input + botón enviar) siempre quede visible al fondo, incluso
+          en pantallas cortas. En desktop hasta 700px. */}
       <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
-        <div className="flex h-screen-90 flex-col md:flex-row" style={{ height: "min(700px, 80vh)" }}>
+        <div className="flex h-screen-90 flex-col md:flex-row" style={{ height: "min(700px, max(75vh, 500px))" }}>
           {/* Columna izquierda: lista */}
           <div className={`md:w-80 md:flex-shrink-0 border-r border-stone-200 flex flex-col ${
             activeClientId ? "hidden md:flex" : "flex flex-1"
           }`}>
             {/* Buscador */}
             <div className="p-3 border-b border-stone-200 flex-shrink-0 space-y-2">
-              <div className="relative">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
-                <input
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Buscar conversación..."
-                  className="w-full pl-9 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-500 focus:bg-white"
-                />
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                  <input
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Buscar conversación..."
+                    className="w-full pl-9 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-500 focus:bg-white"
+                  />
+                </div>
+                {canConfigMsgTemplate && onOpenMsgConfig && (
+                  <button
+                    onClick={onOpenMsgConfig}
+                    title="Configurar plantilla de mensaje de reserva"
+                    className="w-9 h-9 rounded-lg bg-stone-50 border border-stone-200 hover:bg-orange-50 hover:border-orange-300 hover:text-orange-700 text-stone-500 transition grid place-items-center flex-shrink-0"
+                  >
+                    <Settings size={14} />
+                  </button>
+                )}
               </div>
               {/* Filtro por canal */}
               <div className="flex gap-1 overflow-x-auto">
@@ -24127,6 +29269,45 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
                   );
                 })}
               </div>
+
+              {/* Filtro por sede — solo visible para super usuario.
+                  Permite filtrar las conversaciones por la sede de origen
+                  del cliente. Los no-super ya ven solo sus sedes por
+                  la restricción automática aplicada en el memo `filtered`. */}
+              {isSuper && sedes.length > 1 && (
+                <div className="flex gap-1 overflow-x-auto">
+                  <button
+                    onClick={() => setSedeFilter("all")}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition ${
+                      sedeFilter === "all"
+                        ? "bg-orange-600 text-white"
+                        : "bg-orange-50 text-orange-700 hover:bg-orange-100"
+                    }`}
+                  >
+                    <MapPin size={10} strokeWidth={2.4} />
+                    Todas
+                  </button>
+                  {sedes.map(s => {
+                    const count = conversationsList.filter(c => c.client.sedeOrigenId === s.id).length;
+                    return (
+                      <button
+                        key={s.id}
+                        onClick={() => setSedeFilter(s.id)}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition ${
+                          sedeFilter === s.id
+                            ? "bg-orange-600 text-white"
+                            : "bg-orange-50 text-orange-700 hover:bg-orange-100"
+                        }`}
+                      >
+                        {s.name}
+                        <span className={`text-[10px] font-bold px-1 rounded-full ${
+                          sedeFilter === s.id ? "bg-orange-700 text-white" : "bg-orange-100 text-orange-600"
+                        }`}>{count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             {/* Lista de conversaciones */}
             <div className="flex-1 overflow-y-auto">
@@ -24141,6 +29322,7 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
                     conversation={c}
                     active={c.client.id === activeClientId}
                     onClick={() => setActiveClientId(c.client.id)}
+                    sedes={sedes}
                   />
                 ))
               )}
@@ -24148,7 +29330,7 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
           </div>
 
           {/* Columna derecha: conversación abierta */}
-          <div className={`flex-1 min-w-0 flex flex-col ${
+          <div className={`flex-1 min-w-0 flex flex-col relative ${
             !activeClientId ? "hidden md:flex" : "flex"
           }`}>
             {!activeConvo ? (
@@ -24195,7 +29377,56 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
                     </div>
                   </div>
 
-                  {/* Pestañas de facturas abiertas (estilo browser) */}
+                  {/* === Botones flotantes al lado del nombre ===
+                      Lupita = abre ficha del cliente en panel lateral
+                      Patita = abre ficha de mascota
+                      Ambos se renderizan sobre el chat, sin salir de la conversación. */}
+                  {!activeConvo.client.isVisitor && (
+                    <div className="flex items-center gap-1 bg-white border border-stone-200 rounded-lg p-0.5 flex-shrink-0">
+                      <button
+                        onClick={() => {
+                          setSidePanelTab(sidePanelTab === "client" ? null : "client");
+                          if (sidePanelTab !== "client") setSidePanelPetCode(null);
+                        }}
+                        title="Ver ficha del cliente"
+                        className={`w-8 h-8 rounded-md grid place-items-center transition ${
+                          sidePanelTab === "client"
+                            ? "bg-orange-600 text-white"
+                            : "text-stone-600 hover:bg-stone-100 hover:text-orange-700"
+                        }`}
+                      >
+                        <Search size={14} />
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (sidePanelTab === "pet") {
+                            setSidePanelTab(null);
+                            return;
+                          }
+                          // Si solo hay una mascota, la seleccionamos directo. Si hay varias,
+                          // arranca con la primera y desde el panel se puede cambiar.
+                          const firstPetCode = (activeConvo.client.petCodes || [])[0];
+                          if (firstPetCode) {
+                            setSidePanelPetCode(firstPetCode);
+                            setSidePanelTab("pet");
+                          }
+                        }}
+                        title={(activeConvo.client.petCodes || []).length === 0 ? "Sin mascotas registradas" : "Ver ficha de mascota"}
+                        disabled={(activeConvo.client.petCodes || []).length === 0}
+                        className={`w-8 h-8 rounded-md grid place-items-center transition ${
+                          sidePanelTab === "pet"
+                            ? "bg-orange-600 text-white"
+                            : (activeConvo.client.petCodes || []).length === 0
+                            ? "text-stone-300 cursor-not-allowed"
+                            : "text-stone-600 hover:bg-stone-100 hover:text-orange-700"
+                        }`}
+                      >
+                        <PawPrint size={14} />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Pestañas de recibos abiertas (estilo browser) */}
                   {openInvoiceTabs.length > 0 && (
                     <div className="hidden lg:flex items-center gap-1 max-w-md overflow-x-auto">
                       {openInvoiceTabs.map(tab => {
@@ -24224,6 +29455,21 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
                       })}
                     </div>
                   )}
+
+                  {/* Botón "Agendar cita" — abre una ventana flotante
+                      que se mantiene abierta mientras se sigue conversando.
+                      Pre-rellena el cliente actual. */}
+                  <button
+                    onClick={() => setShowAppointmentFloat(true)}
+                    title="Agendar cita para este cliente"
+                    className={`w-9 h-9 rounded-lg grid place-items-center transition ${
+                      showAppointmentFloat
+                        ? "bg-orange-600 text-white"
+                        : "bg-white border border-stone-200 hover:border-orange-300 text-stone-600"
+                    }`}
+                  >
+                    <CalendarPlus size={14} />
+                  </button>
 
                   {/* Menú "..." */}
                   <div className="relative">
@@ -24256,49 +29502,131 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
                             </button>
                           )}
 
+                          {/* Agendar reserva desde el chat */}
+                          <button
+                            onClick={() => { setShowHeaderMenu(false); setShowAppointmentFloat(true); }}
+                            className="w-full flex items-start gap-2.5 p-3 hover:bg-orange-50 transition text-left border-b border-stone-100"
+                          >
+                            <div className="w-8 h-8 rounded-lg bg-orange-100 text-orange-700 grid place-items-center flex-shrink-0">
+                              <CalendarPlus size={13} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-sm">Agendar reserva</div>
+                              <div className="text-xs text-stone-500 leading-snug">
+                                Crear cita + recibo borrador y enviar confirmación.
+                              </div>
+                            </div>
+                          </button>
+
+                          {/* Configurar plantilla de mensaje — solo con permiso msg-config */}
+                          {(userRole === "super" || getFieldLevel(permissions, userRole, "clients", "messaging", "msg-config") !== "hidden") && (
+                            <button
+                              onClick={() => { setShowHeaderMenu(false); setShowAppointmentFloat(true); setAppointmentAutoConfig(true); }}
+                              className="w-full flex items-start gap-2.5 p-3 hover:bg-orange-50 transition text-left border-b border-stone-100"
+                            >
+                              <div className="w-8 h-8 rounded-lg bg-stone-100 text-stone-600 grid place-items-center flex-shrink-0">
+                                <Settings size={13} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-semibold text-sm">Configurar mensaje de reserva</div>
+                                <div className="text-xs text-stone-500 leading-snug">
+                                  Elige qué información incluir en el mensaje de confirmación.
+                                </div>
+                              </div>
+                            </button>
+                          )}
+
                           <div className="px-3 py-2 border-b border-stone-100 bg-stone-50">
                             <div className="text-xs tracking-widest uppercase text-stone-500 font-bold flex items-center justify-between">
-                              <span>Facturas del cliente</span>
-                              <span className="text-xs font-bold px-1.5 py-px rounded-full bg-stone-200 text-stone-700">
-                                {activeClientInvoices.length}
-                              </span>
+                              <span>Recibos del cliente</span>
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs font-bold px-1.5 py-px rounded-full bg-stone-200 text-stone-700">
+                                  {activeClientInvoices.length}
+                                </span>
+                                {/* Botón para abrir el modal de asociación de recibos.
+                                    Permite vincular recibos existentes de otros clientes (ej. cliente
+                                    con varios números). Reasigna clientId, no clona. */}
+                                <button
+                                  onClick={() => { setShowHeaderMenu(false); setShowAssociateInvoice(true); }}
+                                  title="Asociar más recibos a este cliente"
+                                  className="w-5 h-5 rounded-full bg-orange-600 hover:bg-orange-700 text-white grid place-items-center transition ml-0.5"
+                                >
+                                  <Plus size={11} strokeWidth={2.5} />
+                                </button>
+                              </div>
                             </div>
                           </div>
                           <div className="max-h-64 overflow-y-auto">
                             {activeClientInvoices.length === 0 ? (
                               <div className="p-4 text-center text-xs text-stone-500">
-                                Este contacto no tiene facturas registradas.
+                                Este contacto no tiene recibos registradas.
                               </div>
                             ) : (
                               activeClientInvoices.map(inv => {
                                 const isOpen = openInvoiceTabs.some(t => t.invoiceId === inv.id);
+                                // Una recibo es "vinculada" si su dueño original (clientId)
+                                // no es el cliente actual. Aparece acá porque está en linkedClientIds.
+                                const isLinked = inv.clientId !== activeConvo.client.id;
+                                const ownerClient = isLinked ? clients.find(c => c.id === inv.clientId) : null;
                                 return (
-                                  <button
+                                  <div
                                     key={inv.id}
-                                    onClick={() => { setShowHeaderMenu(false); openInvoiceTab(inv.id); }}
-                                    disabled={isOpen}
                                     className={`w-full flex items-center gap-2 p-2.5 transition text-left border-b border-stone-100 last:border-0 ${
-                                      isOpen ? "bg-orange-50 cursor-default" : "hover:bg-stone-50"
+                                      isOpen ? "bg-orange-50" : "hover:bg-stone-50"
                                     }`}
                                   >
-                                    <div className="w-7 h-7 rounded-lg bg-orange-100 text-orange-700 grid place-items-center flex-shrink-0">
-                                      <Receipt size={11} />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-baseline gap-1.5">
-                                        <span className="font-mono text-xs font-bold text-stone-700">{inv.number}</span>
-                                        <InvoiceStateBadge state={inv.state} />
+                                    <button
+                                      onClick={() => { setShowHeaderMenu(false); openInvoiceTab(inv.id); }}
+                                      disabled={isOpen}
+                                      className="flex items-center gap-2 flex-1 min-w-0 text-left disabled:cursor-default"
+                                    >
+                                      <div className={`w-7 h-7 rounded-lg grid place-items-center flex-shrink-0 ${
+                                        isLinked ? "bg-cyan-100 text-cyan-700" : "bg-orange-100 text-orange-700"
+                                      }`}>
+                                        <Receipt size={11} />
                                       </div>
-                                      <div className="text-xs text-stone-500">
-                                        ${inv.total.toFixed(2)} · {inv.issueDate}
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-baseline gap-1.5 flex-wrap">
+                                          <span className="font-mono text-xs font-bold text-stone-700">{inv.number}</span>
+                                          <InvoiceStateBadge state={inv.state} />
+                                          {isLinked && (
+                                            <span className="text-[9px] font-bold uppercase px-1 py-px rounded bg-cyan-100 text-cyan-700" title={`Vinculada desde ${ownerClient?.name || "otro cliente"}`}>
+                                              vinculada
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="text-xs text-stone-500">
+                                          ${inv.total.toFixed(2)} · {inv.issueDate}
+                                          {isLinked && ownerClient && (
+                                            <span className="ml-1">· de {ownerClient.name}</span>
+                                          )}
+                                        </div>
                                       </div>
-                                    </div>
-                                    {isOpen ? (
+                                    </button>
+                                    {isLinked ? (
+                                      // Botón quitar vínculo (solo en recibos vinculadas, no en propias)
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (confirm(`¿Quitar el vínculo de la recibo ${inv.number}?\n\nDejará de aparecer en la ficha de ${activeConvo.client.name} pero seguirá perteneciendo a ${ownerClient?.name || "su dueño"}.`)) {
+                                            setInvoices(prev => prev.map(i =>
+                                              i.id === inv.id
+                                                ? { ...i, linkedClientIds: (i.linkedClientIds || []).filter(x => x !== activeConvo.client.id) }
+                                                : i
+                                            ));
+                                          }
+                                        }}
+                                        title="Quitar vínculo (la recibo seguirá existiendo en su dueño original)"
+                                        className="w-6 h-6 rounded-md bg-stone-100 hover:bg-red-100 hover:text-red-700 text-stone-500 grid place-items-center flex-shrink-0"
+                                      >
+                                        <X size={10} />
+                                      </button>
+                                    ) : isOpen ? (
                                       <span className="text-xs font-semibold text-orange-700">Abierto</span>
                                     ) : (
                                       <ChevronRight size={11} className="text-stone-400" />
                                     )}
-                                  </button>
+                                  </div>
                                 );
                               })
                             )}
@@ -24366,7 +29694,7 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
                               </span>
                             </div>
                           )}
-                          <ChatBubble message={msg} invoices={invoices} onOpenInvoice={openInvoiceTab} />
+                          <ChatBubble message={msg} invoices={invoices} onOpenInvoice={openInvoiceTab} clients={clients} />
                         </Fragment>
                       );
                     })
@@ -24388,7 +29716,7 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
                     {showAttachMenu && (
                       <>
                         <div onClick={() => setShowAttachMenu(false)} className="fixed inset-0 z-30"></div>
-                        <div className="absolute left-0 bottom-full mb-2 w-56 bg-white border border-stone-200 rounded-xl shadow-2xl z-40 overflow-hidden">
+                        <div className="absolute left-0 bottom-full mb-2 w-64 bg-white border border-stone-200 rounded-xl shadow-2xl z-40 overflow-hidden">
                           <button
                             onClick={() => { setShowAttachMenu(false); setShowImagePicker(true); }}
                             className="w-full flex items-start gap-2.5 p-3 hover:bg-orange-50 transition text-left border-b border-stone-100"
@@ -24405,15 +29733,29 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
                           </button>
                           <button
                             onClick={() => { setShowAttachMenu(false); setShowInvoicePicker(true); }}
-                            className="w-full flex items-start gap-2.5 p-3 hover:bg-orange-50 transition text-left"
+                            className="w-full flex items-start gap-2.5 p-3 hover:bg-orange-50 transition text-left border-b border-stone-100"
                           >
                             <div className="w-8 h-8 rounded-lg bg-orange-100 text-orange-700 grid place-items-center flex-shrink-0">
                               <Receipt size={13} />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="font-semibold text-sm">Factura</div>
+                              <div className="font-semibold text-sm">Recibo</div>
                               <div className="text-xs text-stone-500 leading-snug">
-                                Comparte cualquier factura existente.
+                                Comparte cualquier recibo existente.
+                              </div>
+                            </div>
+                          </button>
+                          <button
+                            onClick={() => { setShowAttachMenu(false); setShowPaymentPicker(true); }}
+                            className="w-full flex items-start gap-2.5 p-3 hover:bg-orange-50 transition text-left"
+                          >
+                            <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 grid place-items-center flex-shrink-0">
+                              <Wallet size={13} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-sm">Enviar método de pago</div>
+                              <div className="text-xs text-stone-500 leading-snug">
+                                Envía datos bancarios o wallet al cliente.
                               </div>
                             </div>
                           </button>
@@ -24448,6 +29790,223 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
                 </div>
               </>
             )}
+
+            {/* === Panel lateral de ficha (cliente o mascota) ===
+                Se superpone al chat sin cerrarlo. Click fuera o en X lo cierra.
+                Pensado como vista de referencia rápida sin perder el contexto. */}
+            {sidePanelTab && activeConvo && (
+              <div className="absolute inset-0 bg-stone-900/30 z-20 flex justify-end" onClick={() => setSidePanelTab(null)}>
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="bg-white w-full max-w-sm h-full shadow-2xl flex flex-col border-l border-stone-200 animate-in slide-in-from-right"
+                >
+                  {/* Header del panel */}
+                  <div className="p-4 border-b border-stone-200 flex items-center gap-3 flex-shrink-0">
+                    <div className={`w-10 h-10 rounded-xl grid place-items-center text-white flex-shrink-0 ${
+                      sidePanelTab === "client"
+                        ? "bg-gradient-to-br from-orange-500 to-orange-700"
+                        : "bg-gradient-to-br from-emerald-500 to-emerald-700"
+                    }`}>
+                      {sidePanelTab === "client" ? <Search size={17} /> : <PawPrint size={17} />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">
+                        {sidePanelTab === "client" ? "Ficha del cliente" : "Ficha de mascota"}
+                      </div>
+                      <div className="font-serif text-base font-semibold truncate">
+                        {sidePanelTab === "client"
+                          ? activeConvo.client.name
+                          : (passports.find(p => p.code === sidePanelPetCode)?.name || "Mascota")}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setSidePanelTab(null)}
+                      className="w-8 h-8 rounded-lg bg-stone-100 hover:bg-stone-200 grid place-items-center text-stone-600"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  {/* Body */}
+                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    {sidePanelTab === "client" && (
+                      <>
+                        {/* Datos de contacto */}
+                        <div className="space-y-2">
+                          <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">Datos de contacto</div>
+                          <div className="bg-stone-50 rounded-xl p-3 space-y-2 text-sm">
+                            {activeConvo.client.phone && (
+                              <div className="flex items-center gap-2">
+                                <Phone size={12} className="text-stone-400 flex-shrink-0" />
+                                <span className="text-stone-700">{activeConvo.client.phone}</span>
+                              </div>
+                            )}
+                            {activeConvo.client.email && (
+                              <div className="flex items-center gap-2">
+                                <Mail size={12} className="text-stone-400 flex-shrink-0" />
+                                <span className="text-stone-700 truncate">{activeConvo.client.email}</span>
+                              </div>
+                            )}
+                            {activeConvo.client.cedula && (
+                              <div className="flex items-center gap-2">
+                                <UserCheck size={12} className="text-stone-400 flex-shrink-0" />
+                                <span className="text-stone-700 font-mono">{activeConvo.client.cedula}</span>
+                              </div>
+                            )}
+                            {activeConvo.client.address && (
+                              <div className="flex items-start gap-2">
+                                <MapPin size={12} className="text-stone-400 flex-shrink-0 mt-0.5" />
+                                <span className="text-stone-700">{activeConvo.client.address}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Resumen económico */}
+                        {(activeConvo.client.segment || activeConvo.client.totalSpent != null) && (
+                          <div className="space-y-2">
+                            <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">Resumen</div>
+                            <div className="grid grid-cols-2 gap-2">
+                              {activeConvo.client.segment && (
+                                <div className="bg-stone-50 rounded-xl p-3">
+                                  <div className="text-[10px] uppercase text-stone-500 font-semibold">Segmento</div>
+                                  <div className="text-sm font-semibold mt-0.5">{activeConvo.client.segment}</div>
+                                </div>
+                              )}
+                              {activeConvo.client.totalSpent != null && (
+                                <div className="bg-stone-50 rounded-xl p-3">
+                                  <div className="text-[10px] uppercase text-stone-500 font-semibold">Recibodo</div>
+                                  <div className="text-sm font-semibold mt-0.5">${activeConvo.client.totalSpent.toLocaleString()}</div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Mascotas asociadas */}
+                        {(activeConvo.client.petCodes || []).length > 0 && (
+                          <div className="space-y-2">
+                            <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">
+                              Mascotas ({(activeConvo.client.petCodes || []).length})
+                            </div>
+                            {(activeConvo.client.petCodes || []).map(code => {
+                              const pet = passports.find(p => p.code === code);
+                              if (!pet) return null;
+                              return (
+                                <button
+                                  key={code}
+                                  onClick={() => {
+                                    setSidePanelPetCode(code);
+                                    setSidePanelTab("pet");
+                                  }}
+                                  className="w-full bg-stone-50 hover:bg-emerald-50 rounded-xl p-3 flex items-center gap-3 text-left transition"
+                                >
+                                  <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-700 grid place-items-center flex-shrink-0">
+                                    <PawPrint size={15} />
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="font-semibold text-sm truncate">{pet.name}</div>
+                                    <div className="text-xs text-stone-500 truncate">
+                                      {pet.breed} · {pet.age || "edad N/D"}
+                                    </div>
+                                  </div>
+                                  <ChevronRight size={14} className="text-stone-400 flex-shrink-0" />
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {sidePanelTab === "pet" && (() => {
+                      const pet = passports.find(p => p.code === sidePanelPetCode);
+                      if (!pet) {
+                        return <div className="text-sm text-stone-500 italic">Mascota no encontrada.</div>;
+                      }
+                      return (
+                        <>
+                          {/* Selector de mascota (si hay varias) */}
+                          {(activeConvo.client.petCodes || []).length > 1 && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {(activeConvo.client.petCodes || []).map(code => {
+                                const p = passports.find(pp => pp.code === code);
+                                if (!p) return null;
+                                const active = code === sidePanelPetCode;
+                                return (
+                                  <button
+                                    key={code}
+                                    onClick={() => setSidePanelPetCode(code)}
+                                    className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition ${
+                                      active
+                                        ? "bg-emerald-600 text-white"
+                                        : "bg-stone-100 text-stone-700 hover:bg-stone-200"
+                                    }`}
+                                  >
+                                    {p.name}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          {/* Datos de la mascota */}
+                          <div className="space-y-2">
+                            <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">Identidad</div>
+                            <div className="bg-stone-50 rounded-xl p-3 space-y-2 text-sm">
+                              <div className="flex justify-between">
+                                <span className="text-stone-500">Código</span>
+                                <span className="font-mono font-semibold">{pet.code}</span>
+                              </div>
+                              {pet.species && (
+                                <div className="flex justify-between">
+                                  <span className="text-stone-500">Especie</span>
+                                  <span className="font-semibold">{pet.species}</span>
+                                </div>
+                              )}
+                              {pet.breed && (
+                                <div className="flex justify-between">
+                                  <span className="text-stone-500">Raza</span>
+                                  <span className="font-semibold">{pet.breed}</span>
+                                </div>
+                              )}
+                              {pet.age && (
+                                <div className="flex justify-between">
+                                  <span className="text-stone-500">Edad</span>
+                                  <span className="font-semibold">{pet.age}</span>
+                                </div>
+                              )}
+                              {pet.weight && (
+                                <div className="flex justify-between">
+                                  <span className="text-stone-500">Peso</span>
+                                  <span className="font-semibold">{pet.weight}</span>
+                                </div>
+                              )}
+                              {pet.sex && (
+                                <div className="flex justify-between">
+                                  <span className="text-stone-500">Sexo</span>
+                                  <span className="font-semibold">{pet.sex}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Notas / observaciones */}
+                          {pet.notes && (
+                            <div className="space-y-2">
+                              <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">Notas</div>
+                              <div className="bg-stone-50 rounded-xl p-3 text-sm text-stone-700">
+                                {pet.notes}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -24460,13 +30019,28 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
         />
       )}
 
-      {/* === Modal: seleccionar factura para enviar === */}
+      {/* === Modal: seleccionar recibo para enviar === */}
       {showInvoicePicker && activeConvo && (
         <ChatInvoicePickerModal
           invoices={invoices}
           activeClientId={activeConvo.client.id}
+          clients={clients}
           onClose={() => setShowInvoicePicker(false)}
           onSend={handleSendInvoice}
+        />
+      )}
+
+      {/* === Modal: seleccionar método de pago para enviar al cliente === */}
+      {showPaymentPicker && activeConvo && (
+        <ChatPaymentMethodPickerModal
+          paymentMethods={paymentMethods}
+          onClose={() => setShowPaymentPicker(false)}
+          onSend={(method) => {
+            const message = buildPaymentMethodMessage(method);
+            // Enviar como mensaje regular del operador (canal activo)
+            if (onSendMessage) onSendMessage(activeConvo.client.id, activeChannel, message);
+            setShowPaymentPicker(false);
+          }}
         />
       )}
 
@@ -24480,7 +30054,179 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
         />
       )}
 
-      {/* === Panel flotante: detalle de factura abierta en pestaña === */}
+      {/* === Modal: asociar recibos existentes al cliente del chat ===
+          Lista TODAS las recibos del sistema agrupadas por cliente original.
+          Reasigna clientId al cliente actual del chat (la recibo se "muda" de cliente).
+          Útil para resolver casos donde un cliente con varios teléfonos generó recibos
+          como visitante y queremos consolidar todo en su ficha real. */}
+      {showAssociateInvoice && activeConvo && setInvoices && (
+        <div
+          onClick={() => { setShowAssociateInvoice(false); setAssociateSearch(""); }}
+          className="fixed inset-0 bg-stone-900/80 z-50 flex justify-center items-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl w-full max-w-2xl max-h-[85vh] shadow-2xl overflow-hidden flex flex-col"
+          >
+            {/* Header */}
+            <div className="p-5 border-b border-stone-200 bg-orange-50 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-orange-700 text-white grid place-items-center flex-shrink-0">
+                <Receipt size={18} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs tracking-widest uppercase text-orange-700 font-bold">
+                  Vincular recibo
+                </div>
+                <h3 className="font-serif text-lg font-semibold truncate">
+                  Asociar a {activeConvo.client.name}
+                </h3>
+              </div>
+              <button
+                onClick={() => { setShowAssociateInvoice(false); setAssociateSearch(""); }}
+                className="w-9 h-9 rounded-lg bg-white hover:bg-stone-100 border border-stone-200 grid place-items-center text-stone-600"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto">
+              <div className="p-4 border-b border-stone-200 bg-stone-50 sticky top-0 z-10">
+                <div className="relative">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                  <input
+                    autoFocus
+                    value={associateSearch}
+                    onChange={(e) => setAssociateSearch(e.target.value)}
+                    placeholder="Buscar por número de recibo, cliente o monto..."
+                    className="w-full pl-10 pr-3 py-2 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-orange-500"
+                  />
+                </div>
+                <div className="text-[11px] text-stone-500 mt-2 italic">
+                  La recibo sigue perteneciendo a su cliente original y solo se hace visible también en esta ficha. Útil para clientes con varios números o que también pagaron recibos de otros.
+                </div>
+              </div>
+
+              <div className="divide-y divide-stone-100">
+                {(() => {
+                  // Excluir tanto las del cliente como las que ya están vinculadas
+                  const cid = activeConvo.client.id;
+                  const q = associateSearch.toLowerCase().trim();
+                  const otherInvoices = invoices.filter(inv =>
+                    inv.clientId !== cid &&
+                    !(Array.isArray(inv.linkedClientIds) && inv.linkedClientIds.includes(cid))
+                  );
+                  const matched = q
+                    ? otherInvoices.filter(inv => {
+                        const ownerClient = clients.find(c => c.id === inv.clientId);
+                        return (
+                          (inv.number || "").toLowerCase().includes(q) ||
+                          (ownerClient?.name || "").toLowerCase().includes(q) ||
+                          String(inv.total || "").includes(q)
+                        );
+                      })
+                    : otherInvoices;
+
+                  if (matched.length === 0) {
+                    return (
+                      <div className="p-10 text-center text-sm text-stone-500 italic">
+                        {q ? "Ninguna recibo coincide con la búsqueda." : "No hay recibos disponibles para asociar."}
+                      </div>
+                    );
+                  }
+
+                  return matched.slice(0, 50).map(inv => {
+                    const ownerClient = clients.find(c => c.id === inv.clientId);
+                    return (
+                      <div key={inv.id} className="p-3 flex items-center gap-3 hover:bg-stone-50 transition">
+                        <div className="w-9 h-9 rounded-lg bg-stone-100 text-stone-600 grid place-items-center flex-shrink-0">
+                          <Receipt size={14} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-baseline gap-2">
+                            <span className="font-mono text-sm font-bold text-stone-800">{inv.number}</span>
+                            <InvoiceStateBadge state={inv.state} />
+                          </div>
+                          <div className="text-xs text-stone-500 mt-0.5">
+                            Cliente actual: <span className="font-semibold text-stone-700">{ownerClient?.name || "Sin cliente"}</span> · {inv.issueDate}
+                          </div>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <div className="font-bold text-sm text-stone-900">${(inv.total || 0).toFixed(2)}</div>
+                          <div className="text-[10px] text-stone-500">{inv.items?.length || 0} ítems</div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            // Crear vínculo: agregamos el id del cliente actual al array
+                            // linkedClientIds de la recibo. La recibo sigue siendo del
+                            // dueño original — solo aparece también en la vista del cliente
+                            // actual. Es un modelo de "shadow link", no de reasignación.
+                            setInvoices(prev => prev.map(i => {
+                              if (i.id !== inv.id) return i;
+                              const existing = Array.isArray(i.linkedClientIds) ? i.linkedClientIds : [];
+                              if (existing.includes(activeConvo.client.id)) return i;
+                              return { ...i, linkedClientIds: [...existing, activeConvo.client.id] };
+                            }));
+                            setAssociateSearch("");
+                            setShowAssociateInvoice(false);
+                          }}
+                          className="px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold flex items-center gap-1 flex-shrink-0"
+                        >
+                          <Plus size={11} strokeWidth={2.5} />
+                          Vincular
+                        </button>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-3 border-t border-stone-200 bg-stone-50 text-center text-[11px] text-stone-500">
+              Mostrando primeras 50 recibos. Usa la búsqueda para filtrar.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* === Ventana flotante: Agendar cita ===
+          Se mantiene abierta mientras se sigue conversando. Posicionada en la
+          esquina inferior izquierda para no tapar el composer ni la recibo
+          flotante (que está abajo-derecha). */}
+      {showAppointmentFloat && activeConvo && (() => {
+        const canConfigMsg = userRole === "super" || getFieldLevel(permissions, userRole, "clients", "messaging", "msg-config") !== "hidden";
+        return (
+        <FloatingAppointmentForm
+          client={activeConvo.client}
+          passports={passports}
+          agendaEvents={agendaEvents}
+          setAgendaEvents={setAgendaEvents}
+          modules={modules}
+          sedes={sedes}
+          services={services}
+          invoices={invoices}
+          setInvoices={setInvoices}
+          groomingBookings={groomingBookings}
+          setGroomingBookings={setGroomingBookings}
+          onClose={() => setShowAppointmentFloat(false)}
+          onSendConfirmation={(text) => {
+            if (activeConvo && onSendMessage) {
+              const channel = activeChannel || "whatsapp";
+              onSendMessage(activeConvo.client.id, channel, text);
+            }
+          }}
+          userName={user?.name || ""}
+          msgTemplate={msgTemplate}
+          setMsgTemplate={setMsgTemplate}
+          canConfigMessages={canConfigMsg}
+          initialShowConfig={appointmentAutoConfig}
+          onConfigConsumed={() => setAppointmentAutoConfig(false)}
+        />
+        );
+      })()}
+
+      {/* === Panel flotante: detalle de recibo abierta en pestaña === */}
       {activeInvoiceTabId && (() => {
         const tab = openInvoiceTabs.find(t => t.id === activeInvoiceTabId);
         const inv = tab && invoices.find(i => i.id === tab.invoiceId);
@@ -24536,7 +30282,727 @@ function MessagesView({ clients, setClients, passports = [], setPassports, conve
   );
 }
 
-// === Badge para estado de factura (reusable en chat) ===
+// === Ventana flotante: Agendar cita desde el chat ===
+// Se mantiene abierta sin bloquear la conversación. Se puede chatear y llenar
+// el formulario al mismo tiempo. Posición: esquina inferior izquierda, con
+// drag para moverla si estorba.
+// === Modal global: Configurar plantilla de mensaje de reserva ===
+// Se abre desde el botón ⚙️ del header. Los cambios son inmediatos y aplican
+// a todas las reservas que se creen después. Esto permite al admin/super
+// definir de manera centralizada qué se incluye (ej. ocultar precio para que
+// los vendedores no lo compartan por error).
+function MsgTemplateConfigModal({ msgTemplate, setMsgTemplate, onClose }) {
+  const FIELDS = [
+    { key: "showPetName",  label: "Nombre de mascota", icon: "🐾", desc: "Incluye el nombre de la mascota en el saludo." },
+    { key: "showDate",     label: "Fecha de la cita",  icon: "📅", desc: "Día de la semana y fecha." },
+    { key: "showTime",     label: "Hora",              icon: "🕐", desc: "Hora programada de la cita." },
+    { key: "showServices", label: "Lista de servicios", icon: "📋", desc: "Nombres de los servicios agendados." },
+    { key: "showPrice",    label: "Precio estimado",   icon: "💰", desc: "Monto total estimado. Desactívalo si no quieres que el cliente vea precios." },
+    { key: "showDuration", label: "Duración total",    icon: "⏱️", desc: "Suma de duración de todos los servicios." },
+    { key: "showNotes",    label: "Notas / indicaciones", icon: "📝", desc: "Indicaciones especiales escritas al agendar." },
+  ];
+
+  // Preview de ejemplo
+  const previewParts = [];
+  if (msgTemplate.showGreeting) {
+    let line = msgTemplate.greeting || "✅ Reserva confirmada";
+    if (msgTemplate.showPetName) line += " para Toby";
+    if (msgTemplate.showDate) line += ": jueves 2026-05-15";
+    if (msgTemplate.showTime) line += " a las 10:00";
+    line += ".";
+    previewParts.push(line);
+  }
+  if (msgTemplate.showServices) previewParts.push("📋 Servicios: Consulta general, Vacuna polivalente");
+  if (msgTemplate.showPrice) previewParts.push("💰 Estimado: $77.00");
+  if (msgTemplate.showDuration) previewParts.push("⏱️ Duración: 60 minutos");
+  if (msgTemplate.showNotes) previewParts.push("📝 Notas: Traer cartilla de vacunación");
+  if (msgTemplate.showClosing && msgTemplate.closing) previewParts.push(msgTemplate.closing);
+  const previewText = previewParts.join("\n");
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 bg-stone-900/60 z-50 flex justify-center items-start p-4 sm:p-12 overflow-y-auto">
+      <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "calc(100vh - 6rem)" }}>
+        {/* Header */}
+        <div className="p-5 bg-gradient-to-br from-orange-500 to-orange-600 text-white flex items-center gap-3 flex-shrink-0">
+          <div className="w-11 h-11 rounded-xl bg-white/20 backdrop-blur grid place-items-center flex-shrink-0">
+            <Settings size={20} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs tracking-widest uppercase opacity-90 font-semibold">Configuración global</div>
+            <h3 className="font-serif text-xl font-semibold mt-0.5">Mensaje de reserva</h3>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 grid place-items-center transition flex-shrink-0">
+            <X size={14} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 text-xs text-orange-900 leading-relaxed">
+            <span className="font-semibold">Plantilla global.</span> Estos ajustes definen qué información se incluye
+            en el mensaje de confirmación que se envía al cliente al agendar una reserva desde el chat.
+            Los cambios aplican a todos los usuarios de inmediato.
+          </div>
+
+          {/* Saludo */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <ToggleSwitch on={msgTemplate.showGreeting} onChange={(v) => setMsgTemplate(p => ({ ...p, showGreeting: v }))} />
+              <div>
+                <div className="text-sm font-semibold text-stone-800">Saludo</div>
+                <div className="text-xs text-stone-500">Primera línea del mensaje.</div>
+              </div>
+            </div>
+            {msgTemplate.showGreeting && (
+              <input
+                type="text"
+                value={msgTemplate.greeting}
+                onChange={(e) => setMsgTemplate(p => ({ ...p, greeting: e.target.value }))}
+                className="w-full px-3 py-2 border border-stone-200 rounded-xl text-sm outline-none focus:border-orange-400"
+                placeholder="Ej: ✅ Reserva confirmada"
+              />
+            )}
+          </div>
+
+          {/* Campos individuales */}
+          <div className="space-y-1">
+            {FIELDS.map(f => (
+              <div key={f.key} className={`flex items-center gap-3 p-2.5 rounded-xl transition ${
+                msgTemplate[f.key] ? "bg-orange-50" : "hover:bg-stone-50"
+              }`}>
+                <ToggleSwitch on={msgTemplate[f.key]} onChange={(v) => setMsgTemplate(p => ({ ...p, [f.key]: v }))} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-stone-800 flex items-center gap-1.5">
+                    <span>{f.icon}</span>
+                    <span className="font-semibold">{f.label}</span>
+                    {f.key === "showPrice" && !msgTemplate.showPrice && (
+                      <span className="text-[9px] font-bold px-1.5 py-px rounded bg-red-100 text-red-700">OCULTO</span>
+                    )}
+                  </div>
+                  <div className="text-xs text-stone-500">{f.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Despedida */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <ToggleSwitch on={msgTemplate.showClosing} onChange={(v) => setMsgTemplate(p => ({ ...p, showClosing: v }))} />
+              <div>
+                <div className="text-sm font-semibold text-stone-800">Despedida</div>
+                <div className="text-xs text-stone-500">Última línea del mensaje.</div>
+              </div>
+            </div>
+            {msgTemplate.showClosing && (
+              <input
+                type="text"
+                value={msgTemplate.closing}
+                onChange={(e) => setMsgTemplate(p => ({ ...p, closing: e.target.value }))}
+                className="w-full px-3 py-2 border border-stone-200 rounded-xl text-sm outline-none focus:border-orange-400"
+                placeholder="Ej: ¡Te esperamos!"
+              />
+            )}
+          </div>
+
+          {/* Vista previa */}
+          <div>
+            <div className="text-[10px] tracking-widest uppercase text-stone-400 font-bold mb-1.5">Vista previa del mensaje</div>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 text-sm text-emerald-900 whitespace-pre-line leading-relaxed">
+              {previewText || <span className="italic text-stone-400">Activa al menos un campo para generar el mensaje.</span>}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="p-3 border-t border-stone-200 bg-stone-50 flex gap-2 flex-shrink-0">
+          <button
+            onClick={onClose}
+            className="flex-1 px-3 py-2.5 rounded-xl text-sm font-semibold bg-orange-600 hover:bg-orange-700 text-white transition flex items-center justify-center gap-2"
+          >
+            <Check size={14} /> Guardar configuración
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Mini-toggle reutilizable en formularios compactos
+function ToggleSwitch({ on, onChange }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!on)}
+      className={`w-7 h-4 rounded-full relative transition flex-shrink-0 ${on ? "bg-orange-500" : "bg-stone-300"}`}
+    >
+      <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition ${on ? "left-3.5" : "left-0.5"}`}></span>
+    </button>
+  );
+}
+
+function FloatingAppointmentForm({ client, passports = [], agendaEvents = [], setAgendaEvents, modules = [], sedes = [], services = [], invoices = [], setInvoices, groomingBookings = [], setGroomingBookings, onClose, onSendConfirmation, userName = "", msgTemplate = {}, setMsgTemplate, canConfigMessages = false, initialShowConfig = false, onConfigConsumed }) {
+  const clientPets = useMemo(() => {
+    const codes = client?.petCodes || [];
+    return passports.filter(p => codes.includes(p.code));
+  }, [client, passports]);
+
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const pad = (n) => String(n).padStart(2, "0");
+  const defaultDate = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`;
+
+  const [type, setType] = useState("vet");
+  const [petCode, setPetCode] = useState(clientPets[0]?.code || "");
+  const [date, setDate] = useState(defaultDate);
+  const [time, setTime] = useState("10:00");
+  const [reason, setReason] = useState("");
+  const [sendConfirm, setSendConfirm] = useState(true);
+  const [saved, setSaved] = useState(false);
+  const [showConfig, setShowConfig] = useState(initialShowConfig);
+
+  // Si se abrió desde "Configurar mensaje", expandir el panel de config al montar
+  useEffect(() => {
+    if (initialShowConfig) {
+      setShowConfig(true);
+      onConfigConsumed?.();
+    }
+  }, []);
+
+  // === Servicios seleccionados ===
+  // Filtrados por tipo (vet/grooming) y activos. El usuario puede agregar
+  // varios servicios; cada uno se convierte en un ítem de la recibo.
+  const [selectedServiceIds, setSelectedServiceIds] = useState([]);
+  const [showServicePicker, setShowServicePicker] = useState(false);
+
+  const availableServices = useMemo(() => {
+    const moduleType = type === "vet" ? "vet" : type === "grooming" ? "grooming" : null;
+    if (!moduleType) return [];
+    return services.filter(s => s.module === moduleType && s.active !== false);
+  }, [services, type]);
+
+  const selectedServices = availableServices.filter(s => selectedServiceIds.includes(s.id));
+  const totalPrice = selectedServices.reduce((sum, s) => sum + (s.price || 0), 0);
+  const totalDuration = selectedServices.reduce((sum, s) => sum + (s.duration || 30), 0);
+
+  const toggleService = (svcId) => {
+    setSelectedServiceIds(prev =>
+      prev.includes(svcId) ? prev.filter(id => id !== svcId) : [...prev, svcId]
+    );
+  };
+
+  // Al cambiar tipo, limpiar servicios seleccionados (cambia el catálogo)
+  const changeType = (t) => {
+    if (t !== type) { setType(t); setSelectedServiceIds([]); }
+  };
+
+  // Drag — posición inicial en la zona visible del chat (no detrás del sidebar)
+  const [pos, setPos] = useState({ x: 360, top: null });
+  const dragRef = useRef(null);
+  const onDragStart = (e) => {
+    e.preventDefault();
+    const el = dragRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const offX = e.clientX - rect.left;
+    const offY = e.clientY - rect.top;
+    const handleMove = (ev) => {
+      setPos({ x: Math.max(0, ev.clientX - offX), top: Math.max(0, ev.clientY - offY) });
+    };
+    const handleUp = () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "grabbing";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+  };
+
+  const pet = passports.find(p => p.code === petCode);
+  const valid = date && time && selectedServices.length > 0;
+
+  // Construye el mensaje de confirmación según la plantilla configurada.
+  // Declarado DESPUÉS de selectedServices y pet para evitar TDZ.
+  const buildConfirmMessage = (svcsArg, petArg) => {
+    const t = msgTemplate;
+    const parts = [];
+    const petObj = petArg || pet;
+    const svcs = svcsArg || selectedServices;
+    const dayNames = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+    const d = new Date(date + "T" + (time || "10:00"));
+    const dayName = dayNames[d.getDay()] || "";
+
+    if (t.showGreeting) {
+      let line = t.greeting || "✅ Reserva confirmada";
+      if (t.showPetName && petObj?.name) line += ` para ${petObj.name}`;
+      if (t.showDate) line += `: ${dayName} ${date}`;
+      if (t.showTime) line += ` a las ${time}`;
+      line += ".";
+      parts.push(line);
+    }
+    if (t.showServices && svcs.length > 0) {
+      parts.push(`📋 Servicios: ${svcs.map(s => s.name).join(", ")}`);
+    }
+    if (t.showPrice && svcs.length > 0) {
+      const price = svcs.reduce((sum, s) => sum + (s.price || 0), 0);
+      parts.push(`💰 Estimado: $${price.toFixed(2)}`);
+    }
+    if (t.showDuration && svcs.length > 0) {
+      const dur = svcs.reduce((sum, s) => sum + (s.duration || 0), 0);
+      parts.push(`⏱️ Duración: ${dur} minutos`);
+    }
+    if (t.showNotes && reason.trim()) {
+      parts.push(`📝 Notas: ${reason.trim()}`);
+    }
+    if (t.showClosing && t.closing) {
+      parts.push(t.closing);
+    }
+    return parts.join("\n");
+  };
+
+  // Preview en vivo del mensaje
+  const messagePreview = useMemo(
+    () => buildConfirmMessage(selectedServices, pet),
+    [msgTemplate, selectedServices, pet, date, time, reason]
+  );
+
+  const handleCreate = () => {
+    const ts = Date.now().toString(36);
+    const evtId = `evt-chat-${ts}`;
+    const invoiceId = `inv-chat-${ts}`;
+    const invoiceNumber = `CH-${String(Math.floor(Math.random() * 100000)).padStart(5, "0")}`;
+    const mainService = selectedServices[0];
+    const titleText = selectedServices.length === 1
+      ? mainService.name
+      : `${mainService.name} +${selectedServices.length - 1}`;
+
+    // 1. Evento de agenda con flag source:"chat" para que los kanbans lo detecten
+    const newEvent = {
+      id: evtId,
+      type,
+      date,
+      time,
+      duration: totalDuration,
+      pet: pet?.name || "",
+      petCode: pet?.code || null,
+      species: pet?.species || null,
+      breed: pet?.breed || "",
+      owner: client.name,
+      professional: userName || null,
+      title: titleText,
+      reason: reason.trim() || selectedServices.map(s => s.name).join(", "),
+      room: mainService?.room || null,
+      status: "confirmada",
+      price: totalPrice,
+      clientId: client.id,
+      invoiceId,
+      invoiceNumber,
+      moduleId: null,
+      // Flag clave: indica que este evento se creó desde el chat y debe generar
+      // una reserva en el kanban + un borrador de recibo. Los módulos vet y
+      // grooming lo detectan vía useEffect y crean la entrada correspondiente.
+      source: "chat",
+      serviceIds: selectedServiceIds,
+    };
+    setAgendaEvents(prev => [newEvent, ...prev]);
+
+    // 2. Recibo borrador con los servicios seleccionados
+    if (setInvoices) {
+      const items = selectedServices.map((s, i) => ({
+        id: `item-${i}`,
+        description: s.name,
+        qty: 1,
+        unit: s.price || 0,
+        total: s.price || 0,
+        subtotal: s.price || 0,
+      }));
+      const subtotal = items.reduce((a, it) => a + it.total, 0);
+      const tax = Math.round(subtotal * 0.16);
+      const total = subtotal + tax;
+      const newInvoice = {
+        id: invoiceId,
+        number: invoiceNumber,
+        clientId: client.id,
+        clientName: client.name,
+        state: "borrador",
+        issueDate: new Date().toISOString().slice(0, 10),
+        dueDate: date,
+        items,
+        subtotal,
+        tax,
+        total,
+        paid: 0,
+        balance: total,
+        payments: [],
+        source: "chat",
+        appointmentDate: date,
+        appointmentTime: time,
+        sedeId: client.sedeOrigenId || null,
+      };
+      setInvoices(prev => [...prev, newInvoice]);
+    }
+
+    // 3. Booking de grooming (si es tipo grooming) — para que aparezca en el
+    //    kanban de GroomingOpsView como "Por hacer" el día de la cita.
+    if (type === "grooming" && setGroomingBookings) {
+      const bookingId = `bk-chat-${ts}`;
+      // Heredar moduleId del servicio seleccionado. Si el servicio no lo trae
+      // (catálogo legacy), fallback al grooming base "grooming-ops". Sin esto
+      // el booking quedaría huérfano y solo aparecería en Pet 1.
+      const groomingModuleId = mainService?.moduleId || "grooming-ops";
+      const newBooking = {
+        id: bookingId,
+        clientId: client.id,
+        petName: pet?.name || "Sin nombre",
+        petCode: pet?.code || null,
+        species: pet?.species || "dog",
+        breed: pet?.breed || "",
+        owner: client.name,
+        date,
+        dropOff: time,
+        pickup: null,
+        status: "pending",
+        services: selectedServices.map(s => s.name),
+        suppliesUsed: [],
+        notes: reason.trim() || "",
+        professional: userName || null,
+        invoiceId,
+        source: "chat",
+        moduleId: groomingModuleId,
+        sedeId: client.sedeOrigenId || null,
+      };
+      setGroomingBookings(prev => [...prev, newBooking]);
+    }
+
+    // 4. Mensaje de confirmación (usa la plantilla configurable)
+    if (sendConfirm && onSendConfirmation) {
+      const msg = buildConfirmMessage(selectedServices, pet);
+      onSendConfirmation(msg);
+    }
+
+    setSaved(true);
+    setTimeout(() => { setSaved(false); onClose(); }, 2200);
+  };
+
+  const TYPE_OPTIONS = [
+    { id: "vet",      label: "Veterinaria", icon: Stethoscope, color: "bg-orange-100 text-orange-700 border-orange-300" },
+    { id: "grooming", label: "Grooming",    icon: Scissors, color: "bg-emerald-100 text-emerald-700 border-emerald-300" },
+  ];
+
+  return (
+    <>
+    {/* Backdrop sutil (click para cerrar) */}
+    <div onClick={onClose} className="fixed inset-0 bg-stone-900/30 z-40" />
+    <div
+      ref={dragRef}
+      className="fixed top-0 right-0 bottom-0 z-50 w-96 bg-white border-l border-stone-200 shadow-2xl flex flex-col"
+    >
+      {/* Header */}
+      <div
+        className="p-3 bg-gradient-to-r from-orange-500 to-orange-600 text-white flex items-center gap-2 flex-shrink-0 select-none"
+      >
+        <div className="w-8 h-8 rounded-lg bg-white/20 grid place-items-center flex-shrink-0">
+          <CalendarPlus size={15} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[10px] tracking-widest uppercase opacity-80 font-semibold">Agendar reserva</div>
+          <div className="text-sm font-semibold truncate">{client.name}</div>
+        </div>
+        {selectedServices.length > 0 && (
+          <span className="text-xs font-bold bg-white/20 px-2 py-0.5 rounded-full">
+            ${totalPrice.toFixed(0)}
+          </span>
+        )}
+        <button onClick={onClose} className="w-7 h-7 rounded-full bg-white/20 hover:bg-white/30 grid place-items-center transition flex-shrink-0">
+          <X size={12} />
+        </button>
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {saved ? (
+          <div className="py-6 text-center">
+            <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 grid place-items-center mx-auto mb-2">
+              <CheckCircle size={22} />
+            </div>
+            <div className="font-semibold text-emerald-800">¡Reserva agendada!</div>
+            <div className="text-xs text-stone-500 mt-1">Recibo en borrador creada · Evento en agenda.</div>
+          </div>
+        ) : (
+          <>
+            {/* Tipo */}
+            <div className="flex gap-1.5">
+              {TYPE_OPTIONS.map(t => {
+                const Ic = t.icon;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => changeType(t.id)}
+                    className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold py-2 rounded-xl border transition ${
+                      type === t.id ? t.color : "bg-white border-stone-200 text-stone-500 hover:border-stone-300"
+                    }`}
+                  >
+                    <Ic size={13} /> {t.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Servicios seleccionados */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold">
+                  Servicios {selectedServices.length > 0 && `· ${selectedServices.length}`}
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowServicePicker(!showServicePicker)}
+                  className="text-[11px] font-semibold text-orange-600 hover:text-orange-700 flex items-center gap-0.5"
+                >
+                  <Plus size={11} /> Agregar
+                </button>
+              </div>
+              {/* Servicios ya seleccionados */}
+              {selectedServices.length > 0 && (
+                <div className="space-y-1 mb-2">
+                  {selectedServices.map(s => (
+                    <div key={s.id} className="flex items-center gap-2 p-2 bg-orange-50 border border-orange-200 rounded-lg">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-semibold text-stone-800 truncate">{s.name}</div>
+                        <div className="text-[10px] text-stone-500">{s.duration}min · ${s.price}</div>
+                      </div>
+                      <button
+                        onClick={() => toggleService(s.id)}
+                        className="w-5 h-5 rounded bg-white border border-stone-200 hover:border-red-300 grid place-items-center text-stone-400 hover:text-red-500 flex-shrink-0"
+                      >
+                        <X size={9} />
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between px-1 text-[11px] text-stone-500">
+                    <span>Duración total: {totalDuration}min</span>
+                    <span className="font-semibold text-orange-700">Estimado: ${totalPrice.toFixed(2)}</span>
+                  </div>
+                </div>
+              )}
+              {/* Picker desplegable */}
+              {showServicePicker && (
+                <div className="border border-stone-200 rounded-xl overflow-hidden mb-2 max-h-40 overflow-y-auto">
+                  {availableServices.length === 0 ? (
+                    <div className="p-3 text-xs text-stone-400 text-center italic">No hay servicios configurados para este tipo.</div>
+                  ) : (
+                    availableServices.map(s => {
+                      const picked = selectedServiceIds.includes(s.id);
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => { toggleService(s.id); }}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-left transition border-b border-stone-100 last:border-0 ${
+                            picked ? "bg-orange-50" : "hover:bg-stone-50"
+                          }`}
+                        >
+                          <div className={`w-4 h-4 rounded flex-shrink-0 grid place-items-center border ${
+                            picked ? "bg-orange-600 border-orange-600" : "border-stone-300"
+                          }`}>
+                            {picked && <Check size={10} className="text-white" strokeWidth={3} />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-xs font-semibold text-stone-700 truncate">{s.name}</div>
+                          </div>
+                          <div className="text-[10px] text-stone-500 flex-shrink-0">{s.duration}m</div>
+                          <div className="text-xs font-bold text-stone-700 flex-shrink-0">${s.price}</div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+              {selectedServices.length === 0 && !showServicePicker && (
+                <button
+                  type="button"
+                  onClick={() => setShowServicePicker(true)}
+                  className="w-full p-3 rounded-xl border-2 border-dashed border-stone-200 hover:border-orange-300 text-center text-xs text-stone-400 hover:text-orange-600 transition"
+                >
+                  Haz clic en "+ Agregar" para seleccionar servicios del catálogo
+                </button>
+              )}
+            </div>
+
+            {/* Mascota */}
+            {clientPets.length > 0 && (
+              <div>
+                <label className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold block mb-1">Mascota</label>
+                <select
+                  value={petCode}
+                  onChange={(e) => setPetCode(e.target.value)}
+                  className="w-full px-2.5 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400"
+                >
+                  <option value="">— Sin mascota —</option>
+                  {clientPets.map(p => (
+                    <option key={p.code} value={p.code}>{p.name} · {p.species}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Fecha + Hora */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold block mb-1">Fecha</label>
+                <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+                  className="w-full px-2.5 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400" />
+              </div>
+              <div>
+                <label className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold block mb-1">Hora</label>
+                <input type="time" value={time} onChange={(e) => setTime(e.target.value)}
+                  className="w-full px-2.5 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400" />
+              </div>
+            </div>
+
+            {/* Notas */}
+            <div>
+              <label className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold block mb-1">Notas (opcional)</label>
+              <textarea value={reason} onChange={(e) => setReason(e.target.value)}
+                placeholder="Indicaciones especiales..."
+                rows={2} className="w-full px-2.5 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400 resize-none" />
+            </div>
+
+            {/* Toggle confirmación + botón config */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setSendConfirm(!sendConfirm)}
+                  className="flex-1 flex items-center gap-2 p-2 rounded-lg bg-stone-50 hover:bg-stone-100 transition text-left">
+                  <div className={`w-8 h-5 rounded-full relative transition flex-shrink-0 ${sendConfirm ? "bg-emerald-500" : "bg-stone-300"}`}>
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition ${sendConfirm ? "left-3.5" : "left-0.5"}`}></span>
+                  </div>
+                  <span className="text-xs font-semibold text-stone-700">Enviar confirmación</span>
+                </button>
+                {/* Botón de configuración — solo visible si el rol tiene el
+                    permiso msg-config (gateado por canConfigMessages). */}
+                {canConfigMessages && (
+                  <button
+                    type="button"
+                    onClick={() => setShowConfig(!showConfig)}
+                    title="Configurar plantilla del mensaje"
+                    className={`w-9 h-9 rounded-lg grid place-items-center transition flex-shrink-0 ${
+                      showConfig
+                        ? "bg-orange-600 text-white"
+                        : "bg-stone-100 hover:bg-stone-200 text-stone-500"
+                    }`}
+                  >
+                    <Settings size={14} />
+                  </button>
+                )}
+              </div>
+
+              {/* Preview del mensaje */}
+              {sendConfirm && selectedServices.length > 0 && !showConfig && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 text-xs text-emerald-900 whitespace-pre-line leading-relaxed">
+                  <div className="text-[9px] tracking-widest uppercase text-emerald-600 font-bold mb-1">Vista previa</div>
+                  {messagePreview}
+                </div>
+              )}
+
+              {/* Panel de configuración de plantilla */}
+              {showConfig && (
+                <div className="border border-orange-200 rounded-xl overflow-hidden bg-orange-50/50">
+                  <div className="px-3 py-2 bg-orange-100 border-b border-orange-200 flex items-center gap-2">
+                    <Settings size={12} className="text-orange-700" />
+                    <span className="text-xs font-bold text-orange-800">Configurar mensaje</span>
+                  </div>
+                  <div className="p-3 space-y-2">
+                    {/* Saludo */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <ToggleSwitch on={msgTemplate.showGreeting} onChange={(v) => setMsgTemplate(p => ({ ...p, showGreeting: v }))} />
+                        <span className="text-xs font-semibold text-stone-700">Saludo</span>
+                      </div>
+                      {msgTemplate.showGreeting && (
+                        <input
+                          type="text"
+                          value={msgTemplate.greeting}
+                          onChange={(e) => setMsgTemplate(p => ({ ...p, greeting: e.target.value }))}
+                          className="w-full px-2 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-orange-400"
+                        />
+                      )}
+                    </div>
+                    {/* Toggles de campos */}
+                    {[
+                      { key: "showPetName",  label: "Nombre de mascota", icon: "🐾" },
+                      { key: "showDate",     label: "Fecha",             icon: "📅" },
+                      { key: "showTime",     label: "Hora",              icon: "🕐" },
+                      { key: "showServices", label: "Lista de servicios",icon: "📋" },
+                      { key: "showPrice",    label: "Precio estimado",   icon: "💰" },
+                      { key: "showDuration", label: "Duración total",    icon: "⏱️" },
+                      { key: "showNotes",    label: "Notas / indicaciones", icon: "📝" },
+                    ].map(item => (
+                      <div key={item.key} className="flex items-center gap-2">
+                        <ToggleSwitch on={msgTemplate[item.key]} onChange={(v) => setMsgTemplate(p => ({ ...p, [item.key]: v }))} />
+                        <span className="text-xs text-stone-600">{item.icon} {item.label}</span>
+                      </div>
+                    ))}
+                    {/* Despedida */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <ToggleSwitch on={msgTemplate.showClosing} onChange={(v) => setMsgTemplate(p => ({ ...p, showClosing: v }))} />
+                        <span className="text-xs font-semibold text-stone-700">Despedida</span>
+                      </div>
+                      {msgTemplate.showClosing && (
+                        <input
+                          type="text"
+                          value={msgTemplate.closing}
+                          onChange={(e) => setMsgTemplate(p => ({ ...p, closing: e.target.value }))}
+                          className="w-full px-2 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-orange-400"
+                        />
+                      )}
+                    </div>
+                  </div>
+                  {/* Preview dentro de la config */}
+                  {selectedServices.length > 0 && (
+                    <div className="px-3 pb-3">
+                      <div className="bg-white border border-stone-200 rounded-xl p-2.5 text-xs text-stone-700 whitespace-pre-line leading-relaxed">
+                        <div className="text-[9px] tracking-widest uppercase text-stone-400 font-bold mb-1">Vista previa</div>
+                        {messagePreview || <span className="italic text-stone-400">Selecciona al menos un campo para incluir en el mensaje.</span>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Footer */}
+      {!saved && (
+        <div className="p-2.5 border-t border-stone-200 bg-stone-50 flex-shrink-0 space-y-1.5">
+          {selectedServices.length > 0 && (
+            <div className="text-[11px] text-stone-500 text-center">
+              {selectedServices.length} servicio{selectedServices.length !== 1 ? "s" : ""} · {totalDuration}min · Recibo borrador ${totalPrice.toFixed(2)} + IVA
+            </div>
+          )}
+          <button
+            onClick={handleCreate}
+            disabled={!valid}
+            className={`w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold transition shadow ${
+              valid ? "bg-orange-600 hover:bg-orange-700 text-white" : "bg-stone-200 text-stone-400 cursor-not-allowed"
+            }`}
+          >
+            <CalendarCheck size={14} /> Confirmar reserva
+          </button>
+        </div>
+      )}
+    </div>
+    </>
+  );
+}
+
+// === Badge para estado de recibo (reusable en chat) ===
 function InvoiceStateBadge({ state }) {
   const config = {
     borrador:   { label: "Borrador",   bg: "bg-slate-200",   text: "text-slate-700" },
@@ -24554,13 +31020,18 @@ function InvoiceStateBadge({ state }) {
 }
 
 // === Item de la lista de conversaciones (sidebar izquierdo de Mensajes) ===
-function ConversationListItem({ conversation, active, onClick }) {
+function ConversationListItem({ conversation, active, onClick, sedes = [] }) {
   const { client, lastMessage, unread, channels } = conversation;
   const initials = client.name.split(" ").slice(0, 2).map(s => s[0]).join("").toUpperCase();
   const lastChannel = lastMessage.channel;
   const channelInfo = CHAT_CHANNELS[lastChannel];
   const ChannelIcon = channelInfo.icon;
   const colors = CHAT_CHANNEL_CLASSES[channelInfo.color];
+
+  // Sede del cliente — para el badge visual. Si no tiene, no se muestra.
+  const sede = sedes.find(s => s.id === client.sedeOrigenId);
+  // Abreviatura corta de la sede (primeras 2 palabras significativas).
+  const sedeShort = sede ? sede.name.split(" ").slice(0, 2).join(" ") : null;
 
   // Tiempo relativo simple
   const timeAgo = useMemo(() => {
@@ -24606,6 +31077,15 @@ function ConversationListItem({ conversation, active, onClick }) {
             {timeAgo}
           </span>
         </div>
+        {/* Sede del cliente — chip pequeño entre el nombre y el preview */}
+        {sedeShort && (
+          <div className="mb-0.5">
+            <span className="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-[9px] font-bold bg-orange-100 text-orange-700">
+              <MapPin size={7} strokeWidth={2.5} />
+              {sedeShort}
+            </span>
+          </div>
+        )}
         <div className="flex items-center gap-1.5">
           {lastMessage.direction === "out" && (
             <span className="text-stone-400 text-xs flex-shrink-0">→</span>
@@ -25101,27 +31581,12 @@ function VetPassportView({ passports, setPassports, initialSearch, onClearInitia
 
   return (
     <div className="space-y-5">
-      {/* Hero */}
-      <div className="relative p-6 rounded-2xl bg-gradient-to-br from-white via-orange-50 to-orange-100 border border-stone-200 overflow-hidden">
-        <div className="flex items-center gap-4 flex-wrap">
-          <div className="flex-1 min-w-0">
-            <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold mb-1">
-              Vista clínica · Pasaportes
-            </div>
-            <h2 className="font-serif text-3xl font-semibold leading-tight">
-              <span className="text-orange-700">{passports.length}</span> historias clínicas
-            </h2>
-            <p className="text-sm text-stone-600 mt-1 max-w-xl">
-              Historial médico completo de cada paciente. Solo información clínica — datos sensibles del tutor restringidos.
-            </p>
-          </div>
-        </div>
-        {/* Aviso de privacidad */}
-        <div className="mt-4 p-3 rounded-xl bg-white border border-orange-200 flex items-start gap-2.5 text-xs text-stone-700">
-          <Lock size={14} className="text-orange-700 flex-shrink-0 mt-0.5" />
-          <div>
-            <strong className="text-stone-900">Vista clínica:</strong> esta sección oculta datos administrativos del cliente (cédula, dirección, facturación). Para gestión completa del cliente, dirígete al módulo Pasaportes.
-          </div>
+      {/* Aviso de privacidad — antes vivía dentro del hero, ahora es banner independiente.
+          Es info legal/regulatoria que el usuario debe ver al entrar a esta vista. */}
+      <div className="p-3 rounded-xl bg-orange-50 border border-orange-200 flex items-start gap-2.5 text-xs text-stone-700">
+        <Lock size={14} className="text-orange-700 flex-shrink-0 mt-0.5" />
+        <div>
+          <strong className="text-stone-900">Vista clínica:</strong> esta sección oculta datos administrativos del cliente (cédula, dirección, recibos). Para gestión completa del cliente, dirígete al módulo Pasaportes.
         </div>
       </div>
 
@@ -25397,6 +31862,20 @@ function VetPassportDetailModal({ passport, onClose, setPassports, userName = "O
             passport={passport}
             setPassports={setPassports}
             userName={userName}
+          />
+
+          {/* === FICHA CLÍNICA EDITABLE === */}
+          {/* Datos básicos + identificación + antecedentes/comportamiento.
+              Mismo componente que se usa en PassportDetailModal del módulo Clientes.
+              Acá lo incluimos también para que el veterinario pueda editar la ficha
+              clínica directamente desde la vista clínica sin abrir Clientes. */}
+          <FichaClinicaCard
+            passport={passport}
+            onUpdatePassport={(getFieldLevel(permissions, userRole, "vet", "passport", "edit-ficha") === "edit") ? (updates) => {
+              setPassports && setPassports(prev => prev.map(p =>
+                p.id === passport.id ? { ...p, ...updates } : p
+              ));
+            } : null}
           />
 
           {/* === Secciones-resumen por categoría clínica ===
@@ -26057,16 +32536,20 @@ function ClinicalTimelineEvent({ event, onView, onEdit }) {
 // ========== VISTA: PERFIL DE USUARIO ==========
 // Disponible para todos los roles. Cada usuario configura su perfil profesional.
 
-function UserProfileView({ user }) {
+function UserProfileView({ user, setUser }) {
   const [activeTab, setActiveTab] = useState("personal"); // personal | professional | preferences | security
+  // Separamos cualquier título embebido en el nombre ("Dra. Romero" → "Romero")
+  // para que el nombre/apellido y el selector de título no se dupliquen.
+  const { title: _initialTitle, baseName: _baseName } = splitNameTitle(user?.name || "");
   const [profile, setProfile] = useState(() => ({
     avatar: null, // URL o base64
     avatarInitials: user?.initials || "??",
 
     // Personal
-    firstName: (user?.name || "").split(" ")[0] || "",
-    lastName: (user?.name || "").split(" ").slice(1).join(" ") || "",
-    displayName: user?.name || "",
+    title: user?.title || _initialTitle || "", // título profesional (Dr., Lic., etc.)
+    firstName: _baseName.split(" ")[0] || "",
+    lastName: _baseName.split(" ").slice(1).join(" ") || "",
+    displayName: _baseName || user?.name || "",
     pronouns: "",
     bio: "",
     birthdate: "",
@@ -26132,7 +32615,27 @@ function UserProfileView({ user }) {
   };
 
   const handleSave = () => {
-    // En producción: PATCH /api/users/me con el perfil completo
+    // En producción: PATCH /api/users/me con el perfil completo.
+    // Por ahora persistimos al state global lo que afecta a otras vistas:
+    // el título profesional y el nombre para mostrar (que alimentan, entre
+    // otros, el saludo del dashboard).
+    if (setUser) {
+      const cleanName = (profile.displayName || "").trim()
+        || `${profile.firstName} ${profile.lastName}`.trim();
+      // Recalcular iniciales a partir del nombre limpio (sin título)
+      const initials = cleanName
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map(w => w[0]?.toUpperCase() || "")
+        .join("") || (user?.initials || "??");
+      setUser(prev => ({
+        ...prev,
+        name: cleanName || prev?.name,
+        title: profile.title || "",
+        initials,
+      }));
+    }
     setSaved(true);
     setUnsavedChanges(false);
     setTimeout(() => setSaved(false), 3000);
@@ -26179,7 +32682,7 @@ function UserProfileView({ user }) {
               Mi cuenta
             </div>
             <h2 className="font-serif text-3xl font-semibold leading-tight">
-              {profile.displayName || "Sin nombre"}
+              {`${profile.title ? profile.title + " " : ""}${profile.displayName || "Sin nombre"}`}
             </h2>
             <div className="flex items-center gap-3 mt-2 flex-wrap text-sm text-stone-600">
               <span className="flex items-center gap-1.5">
@@ -26239,6 +32742,17 @@ function UserProfileView({ user }) {
       {/* Tab content */}
       {activeTab === "personal" && (
         <ProfileSection title="Información personal" desc="Cómo te identificas dentro y fuera del sistema.">
+          <ProfileField label="Título profesional" hint="Opcional. Se antepone a tu nombre en el saludo del dashboard.">
+            <select
+              value={profile.title}
+              onChange={(e) => update("title", e.target.value)}
+              className="w-full sm:max-w-xs px-3.5 py-2.5 bg-white border border-stone-200 rounded-xl text-sm outline-none focus:border-orange-500 cursor-pointer"
+            >
+              {USER_TITLES.map(t => (
+                <option key={t.value || "none"} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+          </ProfileField>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <ProfileField label="Nombre">
               <input
@@ -26666,7 +33180,7 @@ function UserProfileView({ user }) {
               <div className="flex-1">
                 <div className="font-semibold text-sm text-red-900">Eliminar mi cuenta</div>
                 <div className="text-xs text-red-800 mt-0.5 leading-relaxed">
-                  Tu acceso será revocado y los datos asociados pasarán a un estado anonimizado. Las facturas y registros médicos firmados se conservan por requerimiento legal.
+                  Tu acceso será revocado y los datos asociados pasarán a un estado anonimizado. Las recibos y registros médicos firmados se conservan por requerimiento legal.
                 </div>
               </div>
               <button className="px-3 py-1.5 rounded-lg bg-white border border-red-300 text-red-700 hover:bg-red-100 text-xs font-semibold transition flex-shrink-0">
@@ -26735,13 +33249,14 @@ function ToggleRow({ icon: Icon, label, desc, checked, onChange }) {
 // Las secciones disponibles dependen de los permisos del rol actual.
 // El super admin ve todas y puede cambiar de "vista de rol" para previsualizar
 // cómo se ve la app desde otro rol — útil para QA y onboarding.
-function CRMHubView({ userRole, perm, modules = [], onSelectSection, vetProps, groomingOpsProps, standardProps, salesProps, onGoToManager }) {
+function CRMHubView({ userRole, perm, permissions = {}, modules = [], onSelectSection, vetProps, groomingOpsProps, standardProps, salesProps, onGoToManager, sedes = [], setSedes = null, activeSedeId = null, setActiveSedeId = null, user = null }) {
+  // ¿Puede el rol acceder al ajuste de CRM?
+  const canManageCRM = userRole === "super" ||
+    getFieldLevel(permissions, userRole, "config", "modules", "view-manager") !== "hidden";
   // Lookup helper: ¿el módulo X está instalado y NO removido?
   const isInstalled = (id) => {
     if (id === "sales") return true; // sales es parte del tronco fijo, siempre presente
     const m = modules.find(mm => mm.id === id);
-    // Si no hay registro en modules (por ejemplo, sales) lo permitimos por defecto.
-    // Solo bloqueamos si EXISTE el registro y está marcado como removed.
     return !m || !m.removed;
   };
   // Resolver nombre dinámico desde el registro de módulos (renombrable desde Manager)
@@ -26749,6 +33264,26 @@ function CRMHubView({ userRole, perm, modules = [], onSelectSection, vetProps, g
     const m = modules.find(mm => mm.id === id);
     return m?.name || fallback;
   };
+
+  // === Sedes visibles según el rol del usuario ===
+  // Super ve todas. Otros roles solo ven sus sedes asignadas (user.sedeIds).
+  // Si el usuario no tiene sedeIds, le mostramos todas (fallback retrocompatible).
+  const visibleSedes = useMemo(() => {
+    if (userRole === "super" || !user?.sedeIds || user.sedeIds.length === 0) {
+      return (sedes || []).filter(s => s.active !== false);
+    }
+    return (sedes || []).filter(s => s.active !== false && user.sedeIds.includes(s.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sedes, userRole, user]);
+
+  // Si la sede activa no es visible para este usuario, saltar a la primera
+  useEffect(() => {
+    if (visibleSedes.length === 0) return;
+    if (!activeSedeId || !visibleSedes.find(s => s.id === activeSedeId)) {
+      setActiveSedeId && setActiveSedeId(visibleSedes[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleSedes, activeSedeId]);
 
   // Mapa kind → metadatos visuales (icon, accent, descripción base).
   // Los módulos clonados desde una plantilla (ej. "Veterinaria 2") heredan estos
@@ -26761,33 +33296,25 @@ function CRMHubView({ userRole, perm, modules = [], onSelectSection, vetProps, g
     custom:   { Icon: LayoutGrid,  accent: "from-stone-500 to-stone-700",    desc: "CRM personalizado con campos y reglas propias." },
   };
 
-  // Secciones que el rol actual tiene permiso de ver Y cuyo módulo está instalado.
-  // Sales siempre presente (parte del tronco). El resto se construye iterando sobre
-  // `modules` (registro global): cada módulo no-removido aporta su propia pestaña.
-  // Permisos: el rol debe tener acceso al `kind` (ej. "vet") para ver TODOS los módulos
-  // de ese kind. Si quieres permisos individuales por instancia, eso vendrá después.
+  // Secciones visibles para el rol Y que pertenecen a la sede activa.
+  // Sales es transversal (siempre aparece). Vet/Grooming/Standard se filtran
+  // por su sedeId. Si un módulo no tiene sedeId (legacy), aparece en todas las sedes.
   const sections = useMemo(() => {
     const list = [];
     // Ventas va primero — es el flujo de cierre que más se consulta a diario.
     if (canAccess(perm, "sales")) {
-      list.push({ id: "sales", label: "Ventas", Icon: ShoppingBag, accent: "from-purple-500 to-purple-700", desc: "Facturación, pagos, planes de crédito y comprobantes." });
+      list.push({ id: "sales", label: "Ventas", Icon: ShoppingBag, accent: "from-purple-500 to-purple-700", desc: "Recibos, pagos, planes de crédito y comprobantes." });
     }
-    // Iteramos sobre TODOS los módulos instalados — esto incluye los core (vet,
-    // grooming-ops, standard) y cualquier nuevo creado desde Manager.
+    // Iteramos sobre los módulos instalados filtrando por sede activa.
     (modules || []).filter(m => !m.removed).forEach(m => {
-      // === Permisos por instancia ===
-      // Cada módulo tiene su propio id en la matriz de permisos. Los core (vet,
-      // grooming-ops, standard) ya están en ALL_VIEWS. Los clones (vet-lxabc...)
-      // se agregan dinámicamente desde RolesView cuando el admin los asigna.
-      // Si un rol NO tiene el permiso del clon explícito, NO ve esa instancia —
-      // así puedes tener "Veterinario A" con acceso solo a "vet" y "Veterinario B"
-      // con acceso solo a "vet-lxabc...". Sin filtraciones.
-      if (!canAccess(perm, m.id)) return;
+      // Si tenemos sede activa, solo módulos de esa sede (o sin sede = legacy)
+      if (activeSedeId && m.sedeId && m.sedeId !== activeSedeId) return;
+      if (!canAccess(perm, m.id, modules)) return;
 
       const visuals = KIND_VISUALS[m.kind] || KIND_VISUALS.custom;
       list.push({
-        id: m.id,                                  // id único del módulo (ej. "vet" o "vet-lxabc123")
-        kind: m.kind,                              // motor que renderiza ("vet", "grooming", etc.)
+        id: m.id,
+        kind: m.kind,
         label: m.name || m.shortName || m.id,
         Icon: visuals.Icon,
         accent: m.accent ? `from-${m.accent.split(' ')[0].replace('from-', '')} ${m.accent.split(' ')[1]}` : visuals.accent,
@@ -26796,7 +33323,7 @@ function CRMHubView({ userRole, perm, modules = [], onSelectSection, vetProps, g
     });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [perm, modules]);
+  }, [perm, modules, activeSedeId]);
 
   // Vista por defecto: la primera sección a la que el rol tiene acceso
   const [activeSection, setActiveSection] = useState(sections[0]?.id || null);
@@ -26834,28 +33361,54 @@ function CRMHubView({ userRole, perm, modules = [], onSelectSection, vetProps, g
 
   return (
     <div className="space-y-4">
-      {/* Hero con tabs por sección */}
+      {/* Card con doble nivel de pestañas + botón de ajustes */}
       <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
-        <div className="px-5 py-4 border-b border-stone-200 flex items-start gap-4 flex-wrap">
-          <div className="flex-1 min-w-0">
-            <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold mb-1">
-              CRM Modular
-            </div>
-            <h2 className="font-serif text-2xl font-semibold leading-tight">
-              Operación unificada
-            </h2>
-            <p className="text-xs text-stone-500 mt-1">
-              {sections.length} {sections.length === 1 ? "sección activa" : "secciones activas"} según tus permisos.
-              {userRole === "super" && (
-                <button onClick={onGoToManager} className="ml-2 text-orange-600 hover:underline font-semibold">
-                  Configurar módulos →
-                </button>
-              )}
-            </p>
-          </div>
-        </div>
 
-        {/* Tabs */}
+        {/* === NIVEL 1: PESTAÑAS DE SEDE ===
+            Cada sede agrupa sus propios módulos (Vet, Grooming, B2B, etc.).
+            A la derecha, botón "Ajuste de CRM" que abre el manager de módulos/sedes. */}
+        {visibleSedes.length > 0 && (
+          <div className="px-3 py-2 flex items-center gap-1 bg-stone-100 border-b border-stone-200 overflow-x-auto">
+            {visibleSedes.map(sede => {
+              const active = sede.id === activeSedeId;
+              return (
+                <button
+                  key={sede.id}
+                  onClick={() => setActiveSedeId && setActiveSedeId(sede.id)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition flex-shrink-0 ${
+                    active
+                      ? "bg-stone-900 text-white shadow-md"
+                      : "text-stone-600 hover:bg-white"
+                  }`}
+                >
+                  <MapPin size={13} strokeWidth={active ? 2.2 : 1.8} />
+                  {sede.name}
+                  {sede.isDefault && (
+                    <span className={`text-[10px] font-bold uppercase px-1.5 py-px rounded ${
+                      active ? "bg-white/20 text-white" : "bg-orange-100 text-orange-700"
+                    }`}>
+                      Principal
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            {/* Botón "Ajuste de CRM" alineado a la derecha — abre el manager.
+                Visible para super y para roles que tengan el permiso config.modules.view-manager. */}
+            {canManageCRM && (
+              <button
+                onClick={onGoToManager}
+                title="Configurar sedes y módulos"
+                className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-white border border-stone-200 hover:border-orange-400 hover:text-orange-700 text-stone-600 transition flex-shrink-0"
+              >
+                <Settings size={13} />
+                Ajuste de CRM
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* === NIVEL 2: PESTAÑAS DE MÓDULO (filtrados a la sede activa) === */}
         <div className="px-3 py-2 flex gap-1 overflow-x-auto bg-stone-50">
           {sections.map(s => {
             const Icon = s.Icon;
@@ -26875,6 +33428,11 @@ function CRMHubView({ userRole, perm, modules = [], onSelectSection, vetProps, g
               </button>
             );
           })}
+          {sections.length === 0 && (
+            <div className="px-3 py-2 text-xs text-stone-500 italic">
+              Esta sede no tiene módulos configurados. {userRole === "super" && "Click en 'Ajuste de CRM' para agregar uno."}
+            </div>
+          )}
         </div>
       </div>
 
@@ -26901,7 +33459,10 @@ function renderSection(section, vetProps, groomingOpsProps, standardProps, sales
   if (section.kind === "vet")        return <VetCRM {...vetProps} activeModule={targetModule} />;
   if (section.kind === "grooming")   return <GroomingOpsView {...groomingOpsProps} activeModule={targetModule} />;
   if (section.kind === "standard")   return <StandardCRM {...standardProps} activeModule={targetModule} />;
-  // Fallbacks por id legacy (cuando no se pasa section como objeto)
+  // Custom: usa el mismo motor que standard. La diferencia es semántica
+  // (columnas y campos definidos por el cliente).
+  if (section.kind === "custom")     return <StandardCRM title={targetModule?.name || section.name || "CRM"} customFields={targetModule?.fields} activeModule={targetModule} />;
+  // Fallbacks por id legacy
   if (section.id === "vet")          return <VetCRM {...vetProps} />;
   if (section.id === "grooming-ops") return <GroomingOpsView {...groomingOpsProps} />;
   if (section.id === "standard")     return <StandardCRM {...standardProps} />;
@@ -26981,7 +33542,7 @@ function ProductsHubView({ userRole, can, vetCatalogProps, groomingProps }) {
 // ============================================================================
 // Muestra KPIs financieros, citas próximas, alertas operativas y actividad
 // reciente. Adapta el contenido según el rol: super ve todo el negocio,
-// veterinarios solo su clínica, groomers solo grooming, ventas solo facturación.
+// veterinarios solo su clínica, groomers solo grooming, ventas solo recibos.
 //
 // Cada sección agrega "valor en 5 segundos" — el usuario debería poder entender
 // el estado del negocio sin scroll. Las alertas son accionables: un click navega
@@ -27003,7 +33564,7 @@ function DashboardView({
 
   // === Permisos por rol ===
   // Super y sales ven KPIs financieros completos. Vet/grooming ven datos operativos
-  // de su área pero sin totales de facturación (privacidad).
+  // de su área pero sin totales de recibos (privacidad).
   const isSuper = userRole === "super";
   const isSales = userRole === "sales" || isSuper;
   const isVet = userRole === "vet" || isSuper;
@@ -27011,9 +33572,18 @@ function DashboardView({
   // Roles custom: heredan permisos de su base (vet/grooming/sales). Por simplicidad
   // mostramos lo más amplio según los views permitidos.
   const myCustomRole = (customRoles || []).find(r => r.id === userRole);
-  const customSeesSales = myCustomRole?.inheritFrom === "sales" || isSales;
-  const customSeesVet = myCustomRole?.inheritFrom === "vet" || isVet;
-  const customSeesGrooming = myCustomRole?.inheritFrom === "grooming" || isGrooming;
+  // Un rol custom puede heredar de VARIOS roles base a la vez (inheritFromList).
+  // Antes esto miraba solo `inheritFrom` singular, así que un rol "Vet + Groomer"
+  // no veía el área de grooming aquí. Caemos a `inheritFrom` para roles creados
+  // con versiones anteriores que no tienen la lista.
+  const myInheritedBases = myCustomRole
+    ? (myCustomRole.inheritFromList?.length
+        ? myCustomRole.inheritFromList
+        : [myCustomRole.inheritFrom])
+    : [];
+  const customSeesSales = myInheritedBases.includes("sales") || isSales;
+  const customSeesVet = myInheritedBases.includes("vet") || isVet;
+  const customSeesGrooming = myInheritedBases.includes("grooming") || isGrooming;
 
   // === KPIs financieros del día ===
   const todayInvoices = useMemo(
@@ -27021,8 +33591,8 @@ function DashboardView({
     [invoices, todayISO]
   );
 
-  // Ingresos de hoy (sumando todos los pagos hechos hoy, no solo facturas emitidas hoy).
-  // Esto refleja flujo de caja real, incluyendo pagos parciales de facturas viejas.
+  // Ingresos de hoy (sumando todos los pagos hechos hoy, no solo recibos emitidas hoy).
+  // Esto refleja flujo de caja real, incluyendo pagos parciales de recibos viejas.
   const todayRevenue = useMemo(() => {
     let total = 0;
     invoices.forEach(inv => {
@@ -27081,13 +33651,13 @@ function DashboardView({
   const alerts = useMemo(() => {
     const list = [];
 
-    // 1. Facturas vencidas
+    // 1. Recibos vencidas
     if (overdueCount > 0 && customSeesSales) {
       list.push({
         id: "overdue",
         severity: "high",
         Icon: AlertTriangle,
-        title: `${overdueCount} factura${overdueCount > 1 ? "s" : ""} vencida${overdueCount > 1 ? "s" : ""}`,
+        title: `${overdueCount} recibo${overdueCount > 1 ? "s" : ""} vencida${overdueCount > 1 ? "s" : ""}`,
         desc: "Requieren cobro urgente",
         action: () => onNavigate?.("sales"),
         actionLabel: "Ver Ventas",
@@ -27100,7 +33670,7 @@ function DashboardView({
         id: "drafts",
         severity: "medium",
         Icon: FileText,
-        title: `${draftCount} factura${draftCount > 1 ? "s" : ""} en borrador`,
+        title: `${draftCount} recibo${draftCount > 1 ? "s" : ""} en borrador`,
         desc: "Sin emitir",
         action: () => onNavigate?.("sales"),
         actionLabel: "Revisar",
@@ -27165,7 +33735,7 @@ function DashboardView({
   // === Conteo de módulos activos ===
   const activeModulesCount = (modules || []).filter(m => !m.removed).length;
 
-  // === Top clientes del mes (por volumen facturado) ===
+  // === Top clientes del mes (por volumen recibodo) ===
   const topClients = useMemo(() => {
     if (!customSeesSales) return [];
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -27198,7 +33768,20 @@ function DashboardView({
               Panorama operativo · {now.toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" })}
             </div>
             <h2 className="font-serif text-3xl sm:text-4xl font-semibold leading-tight">
-              {greeting}, <span className="text-orange-300">{(userName || "").split(" ")[0]}</span>
+              {greeting},{" "}
+              <span className="text-orange-300">
+                {(() => {
+                  // Nombre completo en el saludo (nombre + apellido), con el
+                  // título profesional del usuario antepuesto si lo configuró.
+                  // Si el nombre ya traía un título embebido (ej. "Dra. Romero"),
+                  // lo separamos para no duplicarlo cuando hay título explícito.
+                  const explicitTitle = user?.title || "";
+                  const { title: embeddedTitle, baseName } = splitNameTitle(userName || "");
+                  const effectiveTitle = explicitTitle || embeddedTitle;
+                  const nameToShow = baseName || (userName || "");
+                  return `${effectiveTitle ? effectiveTitle + " " : ""}${nameToShow}`.trim() || "—";
+                })()}
+              </span>
             </h2>
             <p className="text-sm text-stone-300 mt-2 max-w-md">
               {todayEventsCount > 0
@@ -27224,11 +33807,11 @@ function DashboardView({
           <KpiCard
             label="Ingresos del día"
             value={`$${todayRevenue.toFixed(0)}`}
-            sublabel={`${todayInvoices.length} factura${todayInvoices.length !== 1 ? "s" : ""} emitida${todayInvoices.length !== 1 ? "s" : ""}`}
+            sublabel={`${todayInvoices.length} recibo${todayInvoices.length !== 1 ? "s" : ""} emitida${todayInvoices.length !== 1 ? "s" : ""}`}
             Icon={TrendingUp}
             accent="emerald"
             onClick={() => onNavigate?.("sales")}
-            info="Suma de TODOS los pagos registrados con fecha de hoy, sin importar cuándo se emitió la factura. Incluye pagos parciales de facturas viejas. Los descuentos no se restan aquí — se reflejan en el total ya cobrado. Fuente: Ventas → registros de pago."
+            info="Suma de TODOS los pagos registrados con fecha de hoy, sin importar cuándo se emitió la recibo. Incluye pagos parciales de recibos viejas. Los descuentos no se restan aquí — se reflejan en el total ya cobrado. Fuente: Ventas → registros de pago."
           />
           <KpiCard
             label="Por cobrar"
@@ -27237,7 +33820,7 @@ function DashboardView({
             Icon={Wallet}
             accent={totalDebt > 0 ? "amber" : "stone"}
             onClick={() => onNavigate?.("sales")}
-            info="Suma de los saldos pendientes de TODAS las facturas activas (no incluye borradores). Cada factura aporta el monto que aún falta cobrar = total - pagos recibidos. Se muestra en miles ($k). Fuente: Ventas → campo 'balance' por factura."
+            info="Suma de los saldos pendientes de TODAS las recibos activas (no incluye borradores). Cada recibo aporta el monto que aún falta cobrar = total - pagos recibidos. Se muestra en miles ($k). Fuente: Ventas → campo 'balance' por recibo."
           />
           <KpiCard
             label="Vencidas"
@@ -27246,7 +33829,7 @@ function DashboardView({
             Icon={AlertTriangle}
             accent={overdueCount > 0 ? "red" : "stone"}
             onClick={() => onNavigate?.("sales")}
-            info="Cantidad de facturas en estado 'vencido' — aquellas cuya fecha de vencimiento ya pasó y aún tienen saldo pendiente. Hace falta gestionar el cobro o renegociar plazo. Fuente: Ventas → state='vencido'."
+            info="Cantidad de recibos en estado 'vencido' — aquellas cuya fecha de vencimiento ya pasó y aún tienen saldo pendiente. Hace falta gestionar el cobro o renegociar plazo. Fuente: Ventas → state='vencido'."
           />
           <KpiCard
             label="Citas hoy"
@@ -27260,7 +33843,7 @@ function DashboardView({
         </div>
       )}
 
-      {/* Para roles que NO ven facturación, mostramos KPIs operativos alternativos */}
+      {/* Para roles que NO ven recibos, mostramos KPIs operativos alternativos */}
       {!customSeesSales && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <KpiCard
@@ -27557,6 +34140,524 @@ function KpiCard({ label, value, sublabel, Icon, accent = "stone", onClick, info
 // Configuración del flujo de agenda y citas. Por ahora solo contiene el toggle
 // de auto-aprobación de citas web; se irá enriqueciendo con horarios de atención,
 // días bloqueados, salas, recordatorios, etc.
+// ========== AJUSTES: MÉTODOS DE PAGO ==========
+// Configura qué métodos de pago aparecen en el constructor de recibos.
+// El admin puede activar/desactivar, editar etiquetas, reordenar y marcar
+// cuáles requieren comprobante (voucher) obligatorio.
+function PaymentMethodsView({ paymentMethods = [], setPaymentMethods, userRole = "super", permissions = {} }) {
+  // ¿Puede el usuario configurar (no solo ver) los métodos de pago?
+  const canConfig = userRole === "super" ||
+    getFieldLevel(permissions, userRole, "sales", "payment_methods", "config") === "edit";
+  const readOnly = !canConfig;
+  const [editingLabel, setEditingLabel] = useState(null);
+  const [draftLabel, setDraftLabel] = useState("");
+  // Método cuyos detalles están abriendo
+  const [editingDetailsId, setEditingDetailsId] = useState(null);
+
+  const ICON_OPTS = [
+    { name: "Banknote",       Icon: Banknote,       label: "Efectivo" },
+    { name: "CreditCard",     Icon: CreditCard,     label: "Tarjeta" },
+    { name: "ArrowRightLeft", Icon: ArrowRightLeft, label: "Transferencia" },
+    { name: "Smartphone",     Icon: Smartphone,     label: "Móvil" },
+    { name: "Wallet",         Icon: Wallet,         label: "Billetera" },
+    { name: "Coins",          Icon: Coins,          label: "Monedas" },
+  ];
+
+  const resolveIcon = (name) => ICON_OPTS.find(i => i.name === name)?.Icon || Wallet;
+
+  const toggleEnabled = (id) => {
+    setPaymentMethods(prev => prev.map(m =>
+      m.id === id ? { ...m, enabled: !m.enabled } : m
+    ));
+  };
+
+  const toggleVoucher = (id) => {
+    setPaymentMethods(prev => prev.map(m =>
+      m.id === id ? { ...m, requiresVoucher: !m.requiresVoucher } : m
+    ));
+  };
+
+  const moveUp = (idx) => {
+    if (idx === 0) return;
+    setPaymentMethods(prev => {
+      const next = [...prev];
+      [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+      return next;
+    });
+  };
+
+  const moveDown = (idx) => {
+    if (idx === paymentMethods.length - 1) return;
+    setPaymentMethods(prev => {
+      const next = [...prev];
+      [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+      return next;
+    });
+  };
+
+  const changeIcon = (id, iconName) => {
+    setPaymentMethods(prev => prev.map(m =>
+      m.id === id ? { ...m, iconName } : m
+    ));
+  };
+
+  const saveLabel = (id) => {
+    if (!draftLabel.trim()) {
+      setEditingLabel(null);
+      return;
+    }
+    setPaymentMethods(prev => prev.map(m =>
+      m.id === id ? { ...m, label: draftLabel.trim() } : m
+    ));
+    setEditingLabel(null);
+    setDraftLabel("");
+  };
+
+  const addCustom = () => {
+    const id = `pay-${Date.now().toString(36)}`;
+    setPaymentMethods(prev => [...prev, {
+      id, label: "Nuevo método", iconName: "Wallet", enabled: true, requiresVoucher: true,
+    }]);
+    setEditingLabel(id);
+    setDraftLabel("Nuevo método");
+  };
+
+  const removeCustom = (id) => {
+    // Solo permitir remover métodos custom (no los 4 base) para evitar errores
+    // si un recibo viejo guardó la referencia.
+    const isBuiltIn = ["efectivo", "tarjeta", "transferencia", "pago-movil"].includes(id);
+    if (isBuiltIn) {
+      if (!confirm("Este es un método estándar. Si lo eliminas, los recibos antiguos seguirán mostrándolo pero no podrá seleccionarse al cobrar. ¿Continuar?")) return;
+    } else {
+      if (!confirm("¿Eliminar este método de pago?")) return;
+    }
+    setPaymentMethods(prev => prev.filter(m => m.id !== id));
+  };
+
+  const enabledCount = paymentMethods.filter(m => m.enabled).length;
+
+  return (
+    <div className="max-w-4xl mx-auto pt-2 space-y-4">
+      {readOnly && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2 text-xs text-amber-800">
+          <Lock size={13} className="flex-shrink-0 mt-0.5" />
+          <div>
+            <strong className="block mb-0.5">Modo solo lectura</strong>
+            Tu rol no tiene permiso para modificar los métodos de pago. Puedes consultar la configuración pero no editarla. Habla con un administrador si necesitas hacer cambios.
+          </div>
+        </div>
+      )}
+      <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-6">
+        <div className="flex items-start gap-3 mb-2">
+          <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 grid place-items-center flex-shrink-0">
+            <Wallet size={18} />
+          </div>
+          <div>
+            <div className="text-xs tracking-widest uppercase text-emerald-700 font-semibold">Configuración global</div>
+            <h2 className="font-serif text-2xl font-semibold leading-tight">Métodos de pago</h2>
+            <p className="text-sm text-stone-600 mt-1 max-w-prose">
+              Estos métodos aparecen en el constructor de recibos cuando el cliente paga. Puedes activar/desactivar, cambiar la etiqueta, el orden y marcar cuáles requieren comprobante.
+            </p>
+          </div>
+        </div>
+        <div className="mt-3 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 inline-flex items-center gap-2">
+          <Check size={12} /> {enabledCount} de {paymentMethods.length} métodos activos
+        </div>
+      </div>
+
+      <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
+          <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold">Métodos disponibles</div>
+          <button
+            onClick={addCustom}
+            disabled={readOnly}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition ${
+              readOnly ? "bg-stone-200 text-stone-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 text-white"
+            }`}
+          >
+            <Plus size={11} /> Agregar método
+          </button>
+        </div>
+        <div className="divide-y divide-stone-100">
+          {paymentMethods.map((m, idx) => {
+            const Ic = resolveIcon(m.iconName);
+            const isEditing = editingLabel === m.id;
+            return (
+              <div key={m.id} className={`p-4 flex items-center gap-3 transition ${m.enabled ? "bg-white" : "bg-stone-50"}`}>
+                {/* Reordenar */}
+                <div className="flex flex-col gap-0.5 flex-shrink-0">
+                  <button
+                    onClick={() => moveUp(idx)}
+                    disabled={idx === 0}
+                    className="w-5 h-5 rounded grid place-items-center text-stone-400 hover:text-stone-700 hover:bg-stone-100 disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <ChevronUp size={11} />
+                  </button>
+                  <button
+                    onClick={() => moveDown(idx)}
+                    disabled={idx === paymentMethods.length - 1}
+                    className="w-5 h-5 rounded grid place-items-center text-stone-400 hover:text-stone-700 hover:bg-stone-100 disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    <ChevronDown size={11} />
+                  </button>
+                </div>
+
+                {/* Icono */}
+                <div className="relative group flex-shrink-0">
+                  <div className={`w-11 h-11 rounded-xl grid place-items-center border-2 ${
+                    m.enabled ? "bg-stone-900 border-stone-900 text-white" : "bg-stone-100 border-stone-200 text-stone-400"
+                  }`}>
+                    <Ic size={16} strokeWidth={1.8} />
+                  </div>
+                </div>
+
+                {/* Nombre + iconos selector */}
+                <div className="flex-1 min-w-0">
+                  {isEditing ? (
+                    <input
+                      autoFocus
+                      value={draftLabel}
+                      onChange={(e) => setDraftLabel(e.target.value)}
+                      onBlur={() => saveLabel(m.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveLabel(m.id);
+                        if (e.key === "Escape") { setEditingLabel(null); setDraftLabel(""); }
+                      }}
+                      className="px-2 py-1 border border-orange-400 rounded text-sm font-semibold w-full max-w-xs outline-none focus:ring-2 focus:ring-orange-200"
+                    />
+                  ) : (
+                    <div
+                      onClick={() => { setEditingLabel(m.id); setDraftLabel(m.label); }}
+                      className={`font-semibold text-sm cursor-pointer hover:text-orange-700 ${m.enabled ? "text-stone-900" : "text-stone-500"}`}
+                      title="Click para editar"
+                    >
+                      {m.label}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-1 mt-1.5">
+                    <span className="text-[10px] text-stone-400 uppercase tracking-wider font-semibold mr-1">Ícono:</span>
+                    {ICON_OPTS.map(opt => {
+                      const OptIc = opt.Icon;
+                      const selected = m.iconName === opt.name;
+                      return (
+                        <button
+                          key={opt.name}
+                          onClick={() => changeIcon(m.id, opt.name)}
+                          title={opt.label}
+                          className={`w-6 h-6 rounded grid place-items-center transition ${
+                            selected ? "bg-orange-100 text-orange-700 ring-1 ring-orange-400" : "text-stone-400 hover:bg-stone-100 hover:text-stone-700"
+                          }`}
+                        >
+                          <OptIc size={11} strokeWidth={1.8} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Requiere voucher */}
+                <label className="flex items-center gap-1.5 cursor-pointer flex-shrink-0 px-2.5 py-1.5 rounded-lg hover:bg-stone-50">
+                  <input
+                    type="checkbox"
+                    checked={!!m.requiresVoucher}
+                    onChange={() => toggleVoucher(m.id)}
+                    className="w-3.5 h-3.5 accent-orange-600"
+                  />
+                  <span className="text-xs text-stone-700">Pide comprobante</span>
+                </label>
+
+                {/* Datos del método (banco, cuenta, wallet, etc.) */}
+                <button
+                  onClick={() => setEditingDetailsId(m.id)}
+                  title="Editar datos del método"
+                  className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition flex-shrink-0 ${
+                    Object.values(m.details || {}).some(v => v && v !== "Corriente" && v !== "TRC-20")
+                      ? "bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700"
+                      : "bg-stone-50 hover:bg-stone-100 border border-stone-200 text-stone-500"
+                  }`}
+                >
+                  <Info size={11} /> Datos
+                </button>
+
+                {/* Toggle enabled */}
+                <button
+                  onClick={() => toggleEnabled(m.id)}
+                  title={m.enabled ? "Desactivar" : "Activar"}
+                  className={`relative w-10 h-6 rounded-full transition flex-shrink-0 ${
+                    m.enabled ? "bg-emerald-500" : "bg-stone-300"
+                  }`}
+                >
+                  <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${
+                    m.enabled ? "left-4" : "left-0.5"
+                  }`} />
+                </button>
+
+                {/* Eliminar */}
+                <button
+                  onClick={() => removeCustom(m.id)}
+                  title="Eliminar"
+                  className="w-7 h-7 rounded-lg grid place-items-center text-stone-400 hover:bg-red-50 hover:text-red-600 transition flex-shrink-0"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-start gap-2">
+        <Info size={14} className="text-blue-700 mt-0.5 flex-shrink-0" />
+        <div className="text-xs text-blue-800 leading-relaxed">
+          <strong className="block">¿Cómo se conecta esto?</strong>
+          Los métodos activos aparecen en el panel <strong>Modalidad de pago</strong> al construir un recibo. Si un método pide comprobante, el operador verá un campo obligatorio para ingresar la referencia (REF-xxxxx, AUTH-xxxxx, etc.) al cobrar.
+        </div>
+      </div>
+
+      {/* === MODAL: editar datos del método de pago === */}
+      {editingDetailsId && (() => {
+        const m = paymentMethods.find(p => p.id === editingDetailsId);
+        if (!m) return null;
+        const Ic = resolveIcon(m.iconName);
+        return (
+          <PaymentMethodDetailsEditor
+            method={m}
+            Icon={Ic}
+            onClose={() => setEditingDetailsId(null)}
+            onSave={(details) => {
+              setPaymentMethods(prev => prev.map(p =>
+                p.id === editingDetailsId ? { ...p, details } : p
+              ));
+              setEditingDetailsId(null);
+            }}
+          />
+        );
+      })()}
+    </div>
+  );
+}
+
+// ========== EDITOR DE DATOS DE UN MÉTODO DE PAGO ==========
+// Modal donde el admin captura los datos bancarios / de wallet / etc. para
+// que el operador los vea al cobrar y para que se puedan enviar al cliente
+// por chat. Los campos dependen del id del método:
+//  - efectivo: solo notas
+//  - tarjeta: banco, terminal, últimos dígitos
+//  - transferencia: banco, cuenta, tipo, titular, cédula/RIF
+//  - pago-movil: banco, teléfono, cédula
+//  - zelle: email, teléfono, titular
+//  - cripto: red blockchain, wallet, QR
+function PaymentMethodDetailsEditor({ method, Icon, onClose, onSave }) {
+  const [draft, setDraft] = useState({ ...(method.details || {}) });
+
+  const upd = (key, value) => setDraft(d => ({ ...d, [key]: value }));
+
+  // QR upload (base64) — para criptomonedas. Reutiliza el patrón de fotos clínicas.
+  const handleQrUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => upd("qrCode", ev.target.result);
+    reader.readAsDataURL(file);
+  };
+
+  // Detectar qué campos pedir según el id del método. Para métodos custom
+  // creados por el admin, mostramos un set genérico (banco, cuenta, titular,
+  // notas) que cubre la mayoría de casos.
+  const fields = (() => {
+    const id = method.id;
+    if (id === "efectivo") {
+      return [
+        { key: "notes", label: "Notas internas (opcional)", placeholder: "Caja chica, denominaciones aceptadas, etc.", multiline: true },
+      ];
+    }
+    if (id === "tarjeta") {
+      return [
+        { key: "bank",       label: "Banco emisor",        placeholder: "Banco Mercantil, BBVA Provincial..." },
+        { key: "terminal",   label: "Terminal / POS",      placeholder: "Marca o número del POS" },
+        { key: "lastDigits", label: "Últimos 4 dígitos",   placeholder: "Opcional, por seguridad", mono: true },
+      ];
+    }
+    if (id === "transferencia") {
+      return [
+        { key: "bank",          label: "Banco",                       placeholder: "Banco de Venezuela, Banesco..." },
+        { key: "accountNumber", label: "Número de cuenta (20 dígitos)", placeholder: "0102-0000-00-00000000000", mono: true },
+        { key: "accountType",   label: "Tipo de cuenta",              type: "select", options: ["Corriente", "Ahorros"] },
+        { key: "holderName",    label: "Nombre del titular",          placeholder: "Razón social o nombre de persona" },
+        { key: "holderId",      label: "Cédula / RIF",                placeholder: "V-12.345.678 o J-XXXXXXXX-X", mono: true },
+      ];
+    }
+    if (id === "pago-movil") {
+      return [
+        { key: "bank",     label: "Banco",     placeholder: "Banco de Venezuela, Banesco..." },
+        { key: "phone",    label: "Teléfono asociado", placeholder: "0414-1234567", mono: true },
+        { key: "holderId", label: "Cédula / RIF",      placeholder: "V-12.345.678", mono: true },
+      ];
+    }
+    if (id === "zelle") {
+      return [
+        { key: "email",      label: "Correo electrónico asociado", placeholder: "ejemplo@email.com", mono: true },
+        { key: "phone",      label: "Teléfono asociado (opcional)",placeholder: "+1 555 555 5555",  mono: true },
+        { key: "holderName", label: "Nombre del titular",          placeholder: "Como aparece en la cuenta Zelle" },
+      ];
+    }
+    if (id === "binance" || id === "crypto" || id === "usdt") {
+      return [
+        { key: "network",       label: "Red / Blockchain (¡crítico!)", type: "select", options: ["TRC-20", "ERC-20", "BEP-20", "Polygon", "Solana", "Bitcoin"] },
+        { key: "walletAddress", label: "Dirección de la wallet",       placeholder: "TXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", mono: true, multiline: true },
+        { key: "qrCode",        label: "Código QR (opcional)",         type: "qr" },
+      ];
+    }
+    // Custom: genérico
+    return [
+      { key: "bank",       label: "Entidad / Banco", placeholder: "Nombre de la entidad" },
+      { key: "account",    label: "Cuenta / Identificador", placeholder: "Número, email, wallet..." },
+      { key: "holderName", label: "Titular", placeholder: "Nombre o razón social" },
+      { key: "notes",      label: "Notas adicionales", placeholder: "Cualquier dato relevante para el cliente", multiline: true },
+    ];
+  })();
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 bg-stone-900/70 z-[60] flex justify-center items-start p-4 sm:p-12 overflow-y-auto">
+      <div onClick={(e) => e.stopPropagation()} className="bg-stone-50 rounded-2xl w-full max-w-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="p-4 border-b border-stone-200 bg-gradient-to-br from-blue-50 to-white flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-stone-900 text-white grid place-items-center flex-shrink-0">
+            <Icon size={16} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs tracking-widest uppercase text-blue-700 font-bold">Datos del método</div>
+            <h3 className="font-serif text-lg font-semibold mt-0.5 leading-tight">{method.label}</h3>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-lg bg-white hover:bg-stone-100 grid place-items-center text-stone-500 flex-shrink-0">
+            <X size={14} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          <p className="text-xs text-stone-500 leading-relaxed bg-blue-50 border border-blue-200 rounded-lg p-2.5">
+            Estos datos los verá el operador al cobrar con este método y se incluirán al enviarlos al cliente desde el chat.
+          </p>
+
+          {fields.map(f => (
+            <div key={f.key}>
+              <label className="block text-xs tracking-widest uppercase text-stone-500 font-semibold mb-1.5">
+                {f.label}
+              </label>
+              {f.type === "select" ? (
+                <select
+                  value={draft[f.key] || f.options[0]}
+                  onChange={(e) => upd(f.key, e.target.value)}
+                  className="w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400"
+                >
+                  {f.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              ) : f.type === "qr" ? (
+                <div>
+                  {draft.qrCode ? (
+                    <div className="space-y-2">
+                      <img src={draft.qrCode} alt="QR" className="w-32 h-32 object-contain border border-stone-200 rounded-lg bg-white" />
+                      <button onClick={() => upd("qrCode", null)} className="text-xs text-red-600 hover:text-red-700 font-semibold">
+                        Eliminar QR
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex items-center justify-center gap-2 w-full py-3 bg-white border-2 border-dashed border-stone-300 rounded-lg text-xs text-stone-500 hover:border-orange-400 hover:text-orange-700 cursor-pointer transition">
+                      <Plus size={12} /> Subir imagen del QR
+                      <input type="file" accept="image/*" onChange={handleQrUpload} className="hidden" />
+                    </label>
+                  )}
+                </div>
+              ) : f.multiline ? (
+                <textarea
+                  value={draft[f.key] || ""}
+                  onChange={(e) => upd(f.key, e.target.value)}
+                  placeholder={f.placeholder}
+                  rows={2}
+                  className={`w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400 resize-y placeholder:text-stone-400 ${f.mono ? "font-mono" : ""}`}
+                />
+              ) : (
+                <input
+                  type="text"
+                  value={draft[f.key] || ""}
+                  onChange={(e) => upd(f.key, e.target.value)}
+                  placeholder={f.placeholder}
+                  className={`w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-400 placeholder:text-stone-400 ${f.mono ? "font-mono" : ""}`}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="p-3.5 border-t border-stone-200 bg-white flex justify-end gap-2">
+          <button onClick={onClose} className="px-3 py-2 rounded-xl text-sm font-semibold bg-white border border-stone-200 hover:border-stone-400 text-stone-700">
+            Cancelar
+          </button>
+          <button
+            onClick={() => onSave(draft)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white"
+          >
+            <Check size={12} /> Guardar datos
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ========== HELPERS: render compartido de datos de un método de pago ==========
+// Función reutilizable que renderiza los detalles de un método para mostrarlos
+// inline en el SaleBuilder o copiarlos a un mensaje de chat.
+function renderPaymentMethodDetails(method) {
+  if (!method || !method.details) return null;
+  const d = method.details;
+  const rows = [];
+  const id = method.id;
+
+  if (id === "transferencia") {
+    if (d.bank) rows.push({ label: "Banco", value: d.bank });
+    if (d.accountNumber) rows.push({ label: "Cuenta", value: d.accountNumber, mono: true });
+    if (d.accountType) rows.push({ label: "Tipo", value: d.accountType });
+    if (d.holderName) rows.push({ label: "Titular", value: d.holderName });
+    if (d.holderId) rows.push({ label: "C.I./RIF", value: d.holderId, mono: true });
+  } else if (id === "pago-movil") {
+    if (d.bank) rows.push({ label: "Banco", value: d.bank });
+    if (d.phone) rows.push({ label: "Teléfono", value: d.phone, mono: true });
+    if (d.holderId) rows.push({ label: "C.I./RIF", value: d.holderId, mono: true });
+  } else if (id === "zelle") {
+    if (d.email) rows.push({ label: "Email", value: d.email, mono: true });
+    if (d.phone) rows.push({ label: "Teléfono", value: d.phone, mono: true });
+    if (d.holderName) rows.push({ label: "Titular", value: d.holderName });
+  } else if (id === "binance" || id === "crypto" || id === "usdt") {
+    if (d.network) rows.push({ label: "Red", value: d.network, alert: true });
+    if (d.walletAddress) rows.push({ label: "Wallet", value: d.walletAddress, mono: true });
+  } else if (id === "tarjeta") {
+    if (d.bank) rows.push({ label: "Banco", value: d.bank });
+    if (d.terminal) rows.push({ label: "Terminal", value: d.terminal });
+    if (d.lastDigits) rows.push({ label: "Últimos 4", value: d.lastDigits, mono: true });
+  } else {
+    if (d.bank) rows.push({ label: "Entidad", value: d.bank });
+    if (d.account) rows.push({ label: "Cuenta", value: d.account, mono: true });
+    if (d.holderName) rows.push({ label: "Titular", value: d.holderName });
+    if (d.notes) rows.push({ label: "Notas", value: d.notes });
+  }
+  return rows;
+}
+
+// Función que genera un string de mensaje para enviar por chat con los datos
+// del método. Se usa en el "+" del chat → Enviar método de pago.
+function buildPaymentMethodMessage(method) {
+  if (!method) return "";
+  const rows = renderPaymentMethodDetails(method);
+  if (!rows || rows.length === 0) {
+    return `💳 Método de pago: *${method.label}*`;
+  }
+  const lines = [`💳 *${method.label}*`, ""];
+  rows.forEach(r => {
+    lines.push(`*${r.label}:* ${r.value}`);
+  });
+  return lines.join("\n");
+}
+
 function AgendaSettingsView({ appointmentSettings = { autoApprove: true }, setAppointmentSettings, userRole = "super", agendaEvents = [] }) {
   const isSuper = userRole === "super";
 
@@ -27573,19 +34674,6 @@ function AgendaSettingsView({ appointmentSettings = { autoApprove: true }, setAp
 
   return (
     <div className="max-w-3xl mx-auto space-y-5">
-      {/* Hero */}
-      <div className="relative p-6 rounded-2xl bg-gradient-to-br from-white via-orange-50 to-rose-50 border border-stone-200 overflow-hidden">
-        <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold mb-1">
-          Configuración · Agenda
-        </div>
-        <h2 className="font-serif text-3xl font-semibold leading-tight">
-          Ajustes de <span className="italic text-orange-700">agenda</span>
-        </h2>
-        <p className="text-sm text-stone-600 mt-2">
-          Configura cómo se gestionan las citas que llegan desde el sitio web y cómo se distribuyen los horarios disponibles.
-        </p>
-      </div>
-
       {/* Sección: flujo de citas web */}
       <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
         <div className="p-5 border-b border-stone-200">
@@ -27670,13 +34758,1791 @@ function AgendaSettingsView({ appointmentSettings = { autoApprove: true }, setAp
   );
 }
 
+// ========== VISTA: ANALÍTICAS ==========
+// Panel de indicadores transversal. Lee datos en memoria de todos los módulos
+// y los agrega en grupos: Operación, Finanzas, Clientes, Equipo, Agenda.
+// Cada KPI tiene un icono "i" con tooltip que explica de dónde sale el dato.
+//
+// Decisión de diseño: las métricas se calculan in-memory con useMemo. Cuando se
+// migre a Supabase, conviene mover los cálculos a queries SQL o a una capa de
+// /analytics endpoints para evitar serializar todo el dataset en cada render.
+// ========== INVENTARIO ==========
+// Vista de Ajustes para gestionar el inventario de productos e insumos.
+// Estructura:
+// - Datos seed: INVENTORY_PRODUCTS (productos para venta), INVENTORY_SUPPLIES (insumos)
+// - InventoryView con 2 tabs (Productos | Insumos) y filtros por sede + CRM
+// - Tabla con SKU/código de barras, categoría, proveedor, stock, mínimo, precio, sede, CRM
+// - Resumen ejecutivo arriba (totales, bajo stock, valor)
+// - Sección de movimientos recientes abajo
+
+const INVENTORY_PRODUCTS = [
+  // === Productos de Pet 1 ===
+  { id: "prod-001", sku: "7501032450012", name: "Royal Canin Maxi Adult 15kg", category: "Alimento", supplier: "Distribuidora Mascotas SA", stock: 24, minStock: 10, price: 89.50, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-08" },
+  { id: "prod-002", sku: "7501089730025", name: "Pro Plan Cat Adult 7.5kg", category: "Alimento", supplier: "Distribuidora Mascotas SA", stock: 18, minStock: 8, price: 62.00, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-09" },
+  { id: "prod-003", sku: "8410104010047", name: "Collar antipulgas Seresto perro grande", category: "Accesorios", supplier: "Bayer Distribuidora", stock: 7, minStock: 5, price: 45.00, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-06" },
+  { id: "prod-004", sku: "7891012345678", name: "Shampoo Hipoalergénico 500ml", category: "Higiene", supplier: "Beauty Pet Distrib", stock: 32, minStock: 12, price: 18.50, sedeId: "sede-pet1", moduleId: "grooming-ops", updatedAt: "2026-05-10" },
+  { id: "prod-005", sku: "7891012345692", name: "Acondicionador suavizante 500ml", category: "Higiene", supplier: "Beauty Pet Distrib", stock: 4, minStock: 10, price: 19.80, sedeId: "sede-pet1", moduleId: "grooming-ops", updatedAt: "2026-05-07" },
+  { id: "prod-006", sku: "7501123456789", name: "Snacks dentales 250g", category: "Premios", supplier: "Distribuidora Mascotas SA", stock: 56, minStock: 20, price: 8.50, sedeId: "sede-pet1", moduleId: "standard", updatedAt: "2026-05-11" },
+  { id: "prod-007", sku: "7501987654321", name: "Arena sanitaria 10kg", category: "Higiene", supplier: "Distribuidora Mascotas SA", stock: 12, minStock: 15, price: 14.00, sedeId: "sede-pet1", moduleId: "standard", updatedAt: "2026-05-05" },
+  // === Productos de Pet 2 ===
+  { id: "prod-008", sku: "7501032450029", name: "Royal Canin Mini Puppy 4kg", category: "Alimento", supplier: "Distribuidora Mascotas SA", stock: 15, minStock: 8, price: 38.50, sedeId: "sede-pet2", moduleId: "vet-pet2", updatedAt: "2026-05-09" },
+  { id: "prod-009", sku: "8410104010054", name: "Pipeta antipulgas Frontline perro mediano", category: "Medicamento", supplier: "Bayer Distribuidora", stock: 3, minStock: 6, price: 22.00, sedeId: "sede-pet2", moduleId: "vet-pet2", updatedAt: "2026-05-08" },
+  { id: "prod-010", sku: "7891012345708", name: "Cepillo cardador profesional", category: "Accesorios", supplier: "Beauty Pet Distrib", stock: 11, minStock: 4, price: 24.50, sedeId: "sede-pet2", moduleId: "grooming-pet2", updatedAt: "2026-05-10" },
+  { id: "prod-011", sku: "7891012345722", name: "Loción desodorante 250ml", category: "Higiene", supplier: "Beauty Pet Distrib", stock: 8, minStock: 5, price: 12.00, sedeId: "sede-pet2", moduleId: "grooming-pet2", updatedAt: "2026-05-11" },
+  // === Medicamentos (antes en MEDICINE_CATALOG, ahora en inventario) ===
+  // Cada uno con su flag requiresRecipe para el control de prescripción.
+  { id: "m-001", sku: "MED-BRV250", name: "Bravecto Plus 250mg", category: "Medicamento", supplier: "MSD Animal Health", stock: 15, minStock: 5, price: 42, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-10", presentation: "Comprimido masticable", indication: "Antiparasitario externo + interno", requiresRecipe: false },
+  { id: "m-002", sku: "MED-FLC01", name: "Frontline Combo", category: "Medicamento", supplier: "Boehringer Ingelheim", stock: 20, minStock: 8, price: 22, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-09", presentation: "Pipeta única", indication: "Antiparasitario externo", requiresRecipe: false },
+  { id: "m-003", sku: "MED-NXG01", name: "NexGard Spectra", category: "Medicamento", supplier: "Boehringer Ingelheim", stock: 12, minStock: 5, price: 28, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-11", presentation: "Comprimido", indication: "Antiparasitario interno + externo", requiresRecipe: false },
+  { id: "m-004", sku: "MED-OTM01", name: "Otomax", category: "Medicamento", supplier: "MSD Animal Health", stock: 8, minStock: 3, price: 18, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-08", presentation: "Suspensión ótica 14g", indication: "Otitis bacteriana", requiresRecipe: true },
+  { id: "m-005", sku: "MED-APQ16", name: "Apoquel 16mg", category: "Medicamento", supplier: "Zoetis", stock: 6, minStock: 3, price: 35, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-07", presentation: "Comprimidos x14", indication: "Dermatitis alérgica", requiresRecipe: true },
+  { id: "m-006", sku: "MED-CRN16", name: "Cerenia 16mg", category: "Medicamento", supplier: "Zoetis", stock: 10, minStock: 4, price: 12, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-10", presentation: "Comprimidos x4", indication: "Antiemético", requiresRecipe: true },
+  { id: "m-007", sku: "MED-SYN25", name: "Synulox 250mg", category: "Medicamento", supplier: "Zoetis", stock: 14, minStock: 5, price: 22, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-09", presentation: "Comprimidos x10", indication: "Antibiótico amoxicilina", requiresRecipe: true },
+  { id: "m-008", sku: "MED-MLX15", name: "Meloxicam 1.5mg/ml", category: "Medicamento", supplier: "Boehringer Ingelheim", stock: 9, minStock: 4, price: 18, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-06", presentation: "Suspensión oral 32ml", indication: "Antiinflamatorio", requiresRecipe: true },
+  { id: "m-009", sku: "MED-DRN01", name: "Drontal Plus", category: "Medicamento", supplier: "Bayer Distribuidora", stock: 25, minStock: 10, price: 14, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-11", presentation: "Comprimidos x2", indication: "Desparasitante interno", requiresRecipe: false },
+  { id: "m-010", sku: "MED-VPV01", name: "Vacuna polivalente DHPPi", category: "Medicamento", supplier: "MSD Animal Health", stock: 18, minStock: 8, price: 28, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-08", presentation: "Dosis", indication: "Inmunización canina anual", requiresRecipe: false },
+  { id: "m-011", sku: "MED-VAR01", name: "Vacuna antirrábica", category: "Medicamento", supplier: "Instituto Bioclón", stock: 22, minStock: 10, price: 18, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-10", presentation: "Dosis", indication: "Inmunización antirrábica anual", requiresRecipe: false },
+];
+
+const INVENTORY_SUPPLIES = [
+  // === Insumos de Pet 1 ===
+  { id: "sup-001", sku: "INS-7042001", name: "Jeringas 5ml estériles", category: "Material médico", supplier: "BioMédica Distrib", stock: 240, minStock: 100, cost: 0.35, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-08" },
+  { id: "sup-002", sku: "INS-7042002", name: "Guantes de látex talla M (caja 100u)", category: "Material médico", supplier: "BioMédica Distrib", stock: 8, minStock: 5, cost: 9.50, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-10" },
+  { id: "sup-003", sku: "INS-7042003", name: "Gasas estériles (paquete 50u)", category: "Material médico", supplier: "BioMédica Distrib", stock: 12, minStock: 10, cost: 4.20, sedeId: "sede-pet1", moduleId: "vet", updatedAt: "2026-05-06" },
+  { id: "sup-004", sku: "INS-8033001", name: "Toallas de baño microfibra", category: "Grooming", supplier: "Beauty Pet Distrib", stock: 24, minStock: 12, cost: 3.80, sedeId: "sede-pet1", moduleId: "grooming-ops", updatedAt: "2026-05-09" },
+  { id: "sup-005", sku: "INS-8033002", name: "Cuchillas de corte #10", category: "Grooming", supplier: "Beauty Pet Distrib", stock: 3, minStock: 4, cost: 28.00, sedeId: "sede-pet1", moduleId: "grooming-ops", updatedAt: "2026-05-05" },
+  // === Insumos de Pet 2 ===
+  { id: "sup-006", sku: "INS-7042004", name: "Vendaje cohesivo 5cm x 4m", category: "Material médico", supplier: "BioMédica Distrib", stock: 18, minStock: 8, cost: 2.50, sedeId: "sede-pet2", moduleId: "vet-pet2", updatedAt: "2026-05-07" },
+  { id: "sup-007", sku: "INS-7042005", name: "Hisopos estériles (caja 100u)", category: "Material médico", supplier: "BioMédica Distrib", stock: 6, minStock: 5, cost: 5.20, sedeId: "sede-pet2", moduleId: "vet-pet2", updatedAt: "2026-05-09" },
+  { id: "sup-008", sku: "INS-8033003", name: "Aceite para tijeras profesionales", category: "Grooming", supplier: "Beauty Pet Distrib", stock: 2, minStock: 3, cost: 8.00, sedeId: "sede-pet2", moduleId: "grooming-pet2", updatedAt: "2026-05-10" },
+];
+
+// Movimientos recientes (entradas/salidas/ajustes)
+const INVENTORY_MOVEMENTS = [
+  { id: "mov-001", itemId: "prod-002", itemName: "Pro Plan Cat Adult 7.5kg", type: "salida", qty: 2, reason: "Venta a María Pérez", date: "2026-05-09", user: "Carlos Méndez" },
+  { id: "mov-002", itemId: "prod-005", itemName: "Acondicionador suavizante", type: "salida", qty: 1, reason: "Uso en servicio (Toby)", date: "2026-05-07", user: "Sandra Lara" },
+  { id: "mov-003", itemId: "sup-002", itemName: "Guantes de látex M", type: "entrada", qty: 5, reason: "Compra a proveedor", date: "2026-05-10", user: "Dra. Romero" },
+  { id: "mov-004", itemId: "prod-009", itemName: "Pipeta Frontline", type: "ajuste", qty: -1, reason: "Producto vencido descartado", date: "2026-05-08", user: "Dr. Salazar" },
+  { id: "mov-005", itemId: "sup-005", itemName: "Cuchillas #10", type: "salida", qty: 1, reason: "Reposición en herramientas", date: "2026-05-05", user: "Sandra Lara" },
+  { id: "mov-006", itemId: "prod-001", itemName: "Royal Canin Maxi 15kg", type: "entrada", qty: 12, reason: "Compra a proveedor", date: "2026-05-08", user: "Dra. Romero" },
+];
+
+function InventoryView({ userRole = "super", modules = [], sedes = [], user = null, items: itemsProp, setItems: setItemsProp }) {
+  // Tabs: products | supplies
+  const [activeTab, setActiveTab] = useState("products");
+
+  // === Inventario unificado ===
+  // Viene como prop desde AuthenticatedApp (estado global) para que sea accesible
+  // desde SaleBuilder. Fallback a state local si no se pasa (compatibilidad).
+  const [localItems, setLocalItems] = useState(() => [
+    ...INVENTORY_PRODUCTS.map(p => ({ ...p, isProduct: true, isSupply: false })),
+    ...INVENTORY_SUPPLIES.map(s => ({ ...s, isProduct: false, isSupply: true })),
+  ]);
+  const items = itemsProp || localItems;
+  const setItems = setItemsProp || setLocalItems;
+  // Modal de nuevo item
+  const [showItemModal, setShowItemModal] = useState(false);
+  // Item siendo editado (abre el mismo modal en modo edición). null = no editando
+  const [editingItem, setEditingItem] = useState(null);
+  // Item con confirmación de eliminación pendiente. null = no eliminando
+  const [deletingItem, setDeletingItem] = useState(null);
+  // Mostrar/ocultar los items archivados (con item.hidden === true)
+  const [showHidden, setShowHidden] = useState(false);
+
+  // Toggle del flag "hidden" — oculta el item de las listas sin eliminarlo.
+  // Útil para discontinuar productos manteniendo el histórico de movimientos/ventas.
+  const toggleHidden = (item) => {
+    setItems(prev => prev.map(i =>
+      i.id === item.id ? { ...i, hidden: !i.hidden, updatedAt: new Date().toISOString().slice(0, 10) } : i
+    ));
+  };
+
+  // Toggle de "también es insumo" o "también es producto" según el tab actual.
+  // No mueve el item: lo marca con el flag del OTRO tab para que aparezca en ambos.
+  // Si ya tiene ambos flags y se hace toggle, se quita el del tab actual.
+  const toggleCrossUse = (item) => {
+    setItems(prev => prev.map(i => {
+      if (i.id !== item.id) return i;
+      // En el tab "products" toggleamos isSupply; en "supplies" toggleamos isProduct.
+      const otherFlag = activeTab === "products" ? "isSupply" : "isProduct";
+      const newValue = !i[otherFlag];
+      return {
+        ...i,
+        [otherFlag]: newValue,
+        updatedAt: new Date().toISOString().slice(0, 10),
+      };
+    }));
+  };
+  // Filtros
+  const [filterSede, setFilterSede] = useState("all");
+  const [filterModule, setFilterModule] = useState("all");
+  const [filterCategory, setFilterCategory] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [onlyLowStock, setOnlyLowStock] = useState(false);
+  const [showMovements, setShowMovements] = useState(false);
+
+  // Sedes visibles para este usuario (super ve todas)
+  const visibleSedes = useMemo(() => {
+    if (userRole === "super" || !user?.sedeIds || user.sedeIds.length === 0) {
+      return (sedes || []).filter(s => s.active !== false);
+    }
+    return (sedes || []).filter(s => s.active !== false && user.sedeIds.includes(s.id));
+  }, [sedes, userRole, user]);
+
+  // Si tiene 1 sola sede, no permitimos elegir "all"
+  useEffect(() => {
+    if (visibleSedes.length === 1 && filterSede === "all") {
+      setFilterSede(visibleSedes[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleSedes]);
+
+  // Dataset activo según tab: items con el flag correspondiente
+  const dataset = useMemo(() => {
+    return activeTab === "products"
+      ? items.filter(i => i.isProduct)
+      : items.filter(i => i.isSupply);
+  }, [items, activeTab]);
+
+  // CRMs disponibles según sede filtrada (para el dropdown de "filtrar por CRM")
+  const availableModules = useMemo(() => {
+    let mods = (modules || []).filter(m => !m.removed);
+    if (filterSede !== "all") mods = mods.filter(m => m.sedeId === filterSede);
+    return mods;
+  }, [modules, filterSede]);
+
+  // Cuando cambia la sede, resetear el filtro de CRM si ya no aplica
+  useEffect(() => {
+    if (filterModule !== "all" && !availableModules.find(m => m.id === filterModule)) {
+      setFilterModule("all");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterSede]);
+
+  // Items filtrados
+  const filteredItems = useMemo(() => {
+    let r = dataset;
+    // Por default, ocultamos los items archivados (hidden: true). El toggle
+    // showHidden los hace visibles de vuelta para gestionarlos o reactivarlos.
+    if (!showHidden) r = r.filter(i => !i.hidden);
+    if (filterSede !== "all") r = r.filter(i => i.sedeId === filterSede);
+    if (filterModule !== "all") r = r.filter(i => i.moduleId === filterModule);
+    if (filterCategory !== "all") r = r.filter(i => i.category === filterCategory);
+    if (onlyLowStock) r = r.filter(i => i.stock <= i.minStock);
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      r = r.filter(i =>
+        (i.name || "").toLowerCase().includes(q) ||
+        (i.sku || "").toLowerCase().includes(q) ||
+        (i.supplier || "").toLowerCase().includes(q) ||
+        (i.category || "").toLowerCase().includes(q)
+      );
+    }
+    return r;
+  }, [dataset, filterSede, filterModule, filterCategory, searchQuery, onlyLowStock, showHidden]);
+
+  // Conteo de items ocultos para mostrar en el toggle
+  const hiddenCount = useMemo(() => dataset.filter(i => i.hidden).length, [dataset]);
+
+  // Categorías únicas del dataset actual (después de filtrar por sede/módulo)
+  const categories = useMemo(() => {
+    const s = new Set();
+    dataset.forEach(i => {
+      if (filterSede !== "all" && i.sedeId !== filterSede) return;
+      if (filterModule !== "all" && i.moduleId !== filterModule) return;
+      s.add(i.category);
+    });
+    return Array.from(s);
+  }, [dataset, filterSede, filterModule]);
+
+  // Stats
+  const stats = useMemo(() => {
+    const total = filteredItems.length;
+    const lowStock = filteredItems.filter(i => i.stock <= i.minStock).length;
+    const outOfStock = filteredItems.filter(i => i.stock === 0).length;
+    const totalValue = filteredItems.reduce((sum, i) => sum + (i.stock * (i.price ?? i.cost ?? 0)), 0);
+    return { total, lowStock, outOfStock, totalValue };
+  }, [filteredItems]);
+
+  // Helpers
+  const sedeName = (id) => (sedes || []).find(s => s.id === id)?.name || "—";
+  const moduleName = (id) => (modules || []).find(m => m.id === id)?.name || "—";
+  const moduleKindColor = (id) => {
+    const m = (modules || []).find(mm => mm.id === id);
+    if (!m) return "bg-stone-100 text-stone-700";
+    if (m.kind === "vet") return "bg-orange-100 text-orange-800";
+    if (m.kind === "grooming") return "bg-emerald-100 text-emerald-800";
+    if (m.kind === "standard") return "bg-blue-100 text-blue-800";
+    return "bg-stone-100 text-stone-700";
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Tabs principales: Productos | Insumos */}
+      <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-1.5 flex gap-1">
+        <button
+          onClick={() => setActiveTab("products")}
+          className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition ${
+            activeTab === "products"
+              ? "bg-orange-600 text-white shadow"
+              : "text-stone-600 hover:bg-stone-50"
+          }`}
+        >
+          <Package size={14} />
+          Productos para venta
+          <span className={`text-[10px] font-bold px-1.5 py-px rounded-full ${
+            activeTab === "products" ? "bg-white/20" : "bg-stone-200 text-stone-700"
+          }`}>{items.filter(i => i.isProduct).length}</span>
+        </button>
+        <button
+          onClick={() => setActiveTab("supplies")}
+          className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition ${
+            activeTab === "supplies"
+              ? "bg-emerald-600 text-white shadow"
+              : "text-stone-600 hover:bg-stone-50"
+          }`}
+        >
+          <Boxes size={14} />
+          Insumos para servicios
+          <span className={`text-[10px] font-bold px-1.5 py-px rounded-full ${
+            activeTab === "supplies" ? "bg-white/20" : "bg-stone-200 text-stone-700"
+          }`}>{items.filter(i => i.isSupply).length}</span>
+        </button>
+      </div>
+
+      {/* Stats ejecutivos — barra compacta horizontal */}
+      <div className="bg-white border border-stone-200 rounded-xl shadow-sm px-4 py-2.5 flex items-center gap-1 text-sm divide-x divide-stone-200 overflow-x-auto">
+        <div className="flex items-center gap-2 px-3 flex-shrink-0">
+          <Archive size={13} className="text-stone-500" />
+          <span className="text-stone-500 text-xs">Items</span>
+          <span className="font-bold text-stone-900">{stats.total}</span>
+        </div>
+        <div className={`flex items-center gap-2 px-3 flex-shrink-0 ${stats.lowStock > 0 ? "text-amber-700" : "text-stone-500"}`}>
+          <AlertTriangle size={13} />
+          <span className="text-xs">Bajo stock</span>
+          <span className="font-bold">{stats.lowStock}</span>
+        </div>
+        <div className={`flex items-center gap-2 px-3 flex-shrink-0 ${stats.outOfStock > 0 ? "text-red-700" : "text-stone-500"}`}>
+          <TrendingDown size={13} />
+          <span className="text-xs">Sin stock</span>
+          <span className="font-bold">{stats.outOfStock}</span>
+        </div>
+        <div className="flex items-center gap-2 px-3 flex-shrink-0">
+          <DollarSign size={13} className="text-stone-500" />
+          <span className="text-stone-500 text-xs">Valor</span>
+          <span className="font-bold text-stone-900">${stats.totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+        </div>
+        <div className="flex-1"></div>
+        {/* Botón Nuevo item — alineado a la derecha en la misma barra */}
+        <button
+          onClick={() => setShowItemModal(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-700 text-white text-xs font-semibold transition flex-shrink-0"
+        >
+          <Plus size={13} strokeWidth={2.4} />
+          Nuevo {activeTab === "products" ? "producto" : "insumo"}
+        </button>
+      </div>
+
+      {/* Filtros */}
+      <div className="bg-white border border-stone-200 rounded-2xl shadow-sm p-4 space-y-3">
+        {/* Búsqueda + toggles compactos */}
+        <div className="flex items-stretch gap-2">
+          <div className="relative flex-1">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar por nombre, SKU, categoría o proveedor..."
+              className="w-full pl-10 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-orange-500 focus:bg-white"
+            />
+          </div>
+          {/* Toggle bajo stock — icono + label corto, badge con conteo cuando activo */}
+          <button
+            onClick={() => setOnlyLowStock(v => !v)}
+            title={onlyLowStock ? "Mostrar todos" : "Solo items con stock ≤ mínimo"}
+            className={`px-2.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 flex-shrink-0 ${
+              onlyLowStock
+                ? "bg-amber-600 text-white shadow"
+                : "bg-stone-50 border border-stone-200 text-stone-600 hover:border-amber-300"
+            }`}
+          >
+            <AlertTriangle size={13} strokeWidth={onlyLowStock ? 2.4 : 2} />
+            <span className="hidden sm:inline">Bajo stock</span>
+          </button>
+          {/* Toggle de items ocultos — solo aparece si hay alguno oculto */}
+          {hiddenCount > 0 && (
+            <button
+              onClick={() => setShowHidden(v => !v)}
+              title={showHidden ? "Ocultar archivados" : `Mostrar ${hiddenCount} item${hiddenCount === 1 ? "" : "s"} oculto${hiddenCount === 1 ? "" : "s"}`}
+              className={`px-2.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 flex-shrink-0 ${
+                showHidden
+                  ? "bg-indigo-600 text-white shadow"
+                  : "bg-stone-50 border border-stone-200 text-stone-600 hover:border-indigo-300"
+              }`}
+            >
+              {showHidden ? <Eye size={13} strokeWidth={2.4} /> : <EyeOff size={13} />}
+              <span className={`text-[10px] font-bold px-1.5 rounded-full ${
+                showHidden ? "bg-white/20 text-white" : "bg-stone-200 text-stone-700"
+              }`}>{hiddenCount}</span>
+            </button>
+          )}
+        </div>
+
+        {/* Filtros por sede + CRM + categoría */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Sede */}
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">Sede:</span>
+            {userRole === "super" && visibleSedes.length > 1 && (
+              <button
+                onClick={() => setFilterSede("all")}
+                className={`text-xs font-semibold px-2.5 py-1 rounded-lg transition flex items-center gap-1 ${
+                  filterSede === "all"
+                    ? "bg-stone-900 text-white"
+                    : "bg-stone-50 border border-stone-200 text-stone-600 hover:border-stone-400"
+                }`}
+              >
+                <Layers size={10} /> Todas
+              </button>
+            )}
+            {visibleSedes.map(sede => (
+              <button
+                key={sede.id}
+                onClick={() => setFilterSede(sede.id)}
+                className={`text-xs font-semibold px-2.5 py-1 rounded-lg transition flex items-center gap-1 ${
+                  filterSede === sede.id
+                    ? "bg-stone-900 text-white"
+                    : "bg-stone-50 border border-stone-200 text-stone-600 hover:border-stone-400"
+                }`}
+              >
+                <MapPin size={10} /> {sede.name}
+              </button>
+            ))}
+          </div>
+
+          {/* CRM */}
+          {availableModules.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              <span className="text-[10px] tracking-widest uppercase text-stone-500 font-bold ml-2">CRM:</span>
+              <button
+                onClick={() => setFilterModule("all")}
+                className={`text-xs font-semibold px-2.5 py-1 rounded-lg transition ${
+                  filterModule === "all"
+                    ? "bg-orange-600 text-white"
+                    : "bg-stone-50 border border-stone-200 text-stone-600 hover:border-orange-300"
+                }`}
+              >
+                Todos
+              </button>
+              {availableModules.map(m => (
+                <button
+                  key={m.id}
+                  onClick={() => setFilterModule(m.id)}
+                  className={`text-xs font-semibold px-2.5 py-1 rounded-lg transition ${
+                    filterModule === m.id
+                      ? "bg-orange-600 text-white"
+                      : `${moduleKindColor(m.id)} hover:opacity-80`
+                  }`}
+                >
+                  {m.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Categoría */}
+          {categories.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              <span className="text-[10px] tracking-widest uppercase text-stone-500 font-bold ml-2">Cat:</span>
+              <button
+                onClick={() => setFilterCategory("all")}
+                className={`text-xs font-semibold px-2.5 py-1 rounded-lg transition ${
+                  filterCategory === "all"
+                    ? "bg-cyan-600 text-white"
+                    : "bg-stone-50 border border-stone-200 text-stone-600 hover:border-cyan-300"
+                }`}
+              >
+                Todas
+              </button>
+              {categories.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setFilterCategory(cat)}
+                  className={`text-xs font-semibold px-2.5 py-1 rounded-lg transition ${
+                    filterCategory === cat
+                      ? "bg-cyan-600 text-white"
+                      : "bg-stone-50 border border-stone-200 text-stone-600 hover:border-cyan-300"
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Tabla */}
+      <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
+        {/* Sin overflow-x-auto: la tabla debe caber sin scroll horizontal.
+            Para lograrlo:
+            - Padding reducido (p-2 en celdas)
+            - Categoría como chip pequeño
+            - CRM column condicional: solo en tab "Insumos" (los productos para venta
+              son agnósticos al CRM — cualquier CRM puede venderlos).
+            - Nombre del producto puede partirse en 2 líneas (sin truncate) */}
+        <table className="w-full text-sm table-auto">
+            <thead className="bg-stone-50 border-b border-stone-200">
+              <tr className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">
+                <th className="text-left p-2">Producto</th>
+                <th className="text-left p-2">SKU</th>
+                <th className="text-left p-2">Cat.</th>
+                <th className="text-left p-2">Proveedor</th>
+                <th className="text-right p-2">Stock</th>
+                <th className="text-right p-2 hidden xl:table-cell">Mín</th>
+                <th className="text-right p-2">{activeTab === "products" ? "Precio" : "Costo"}</th>
+                <th className="text-left p-2">Sede</th>
+                {/* CRM solo se muestra en tab Insumos */}
+                {activeTab === "supplies" && (
+                  <th className="text-left p-2">CRM</th>
+                )}
+                <th className="text-left p-2 hidden lg:table-cell">Act.</th>
+                <th className="text-right p-2 w-24">Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredItems.length === 0 ? (
+                <tr>
+                  <td colSpan={activeTab === "products" ? 10 : 11} className="p-10 text-center text-stone-500 text-sm italic">
+                    No hay items que coincidan con los filtros activos.
+                  </td>
+                </tr>
+              ) : filteredItems.map(item => {
+                const isLow = item.stock <= item.minStock;
+                const isOut = item.stock === 0;
+                const isHidden = item.hidden;
+                return (
+                  <tr
+                    key={item.id}
+                    className={`border-b border-stone-100 hover:bg-stone-50 transition ${
+                      isHidden ? "opacity-50 bg-stone-50/60" :
+                      isOut ? "bg-red-50/40" :
+                      isLow ? "bg-amber-50/30" : ""
+                    }`}
+                  >
+                    <td className="p-2 font-semibold text-stone-900">
+                      <div className="flex items-start gap-2">
+                        {item.photo ? (
+                          <img src={item.photo} alt={item.name} className="w-8 h-8 rounded-lg object-cover border border-stone-200 flex-shrink-0" />
+                        ) : (
+                          <div className="w-8 h-8 rounded-lg bg-stone-100 grid place-items-center text-stone-400 flex-shrink-0">
+                            {activeTab === "products" ? <Package size={13} /> : <Boxes size={13} />}
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <div className="text-[13px] leading-tight flex items-center gap-1 flex-wrap">
+                            <span className="break-words">{item.name}</span>
+                            {item.isProduct && item.isSupply && (
+                              <span
+                                title="Este item está en ambas categorías: Productos y Insumos"
+                                className="text-[9px] font-bold uppercase px-1 py-px rounded bg-cyan-100 text-cyan-700 inline-flex items-center gap-0.5"
+                              >
+                                <Layers size={8} /> Dual
+                              </span>
+                            )}
+                            {isHidden && (
+                              <span className="text-[9px] font-bold uppercase px-1 py-px rounded bg-stone-200 text-stone-600 inline-flex items-center gap-0.5">
+                                <EyeOff size={8} />
+                              </span>
+                            )}
+                          </div>
+                          {item.notes && (
+                            <div className="text-[10px] text-stone-500 font-normal italic truncate" title={item.notes}>
+                              {item.notes}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="p-2">
+                      <span className="font-mono text-[11px] bg-stone-100 px-1.5 py-0.5 rounded inline-flex items-center gap-1 whitespace-nowrap">
+                        <Barcode size={9} className="text-stone-500" />
+                        {item.sku}
+                      </span>
+                    </td>
+                    <td className="p-2">
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-stone-100 text-stone-600 whitespace-nowrap">
+                        {item.category}
+                      </span>
+                    </td>
+                    <td className="p-2 text-stone-600 text-[11px] leading-tight">{item.supplier}</td>
+                    <td className="p-2 text-right">
+                      <span className={`font-bold text-sm ${isOut ? "text-red-700" : isLow ? "text-amber-700" : "text-stone-900"}`}>
+                        {item.stock}
+                      </span>
+                    </td>
+                    <td className="p-2 text-right text-stone-500 text-xs hidden xl:table-cell">{item.minStock}</td>
+                    <td className="p-2 text-right font-semibold text-stone-900 whitespace-nowrap">${(item.price ?? item.cost).toFixed(2)}</td>
+                    <td className="p-2">
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-stone-100 text-stone-700 inline-flex items-center gap-0.5 whitespace-nowrap">
+                        <MapPin size={9} /> {sedeName(item.sedeId)}
+                      </span>
+                    </td>
+                    {/* CRM solo en tab Insumos — los productos para venta pueden ser
+                        vendidos por cualquier CRM sin importar a cuál se les asignó. */}
+                    {activeTab === "supplies" && (
+                      <td className="p-2">
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded whitespace-nowrap ${moduleKindColor(item.moduleId)}`}>
+                          {moduleName(item.moduleId)}
+                        </span>
+                      </td>
+                    )}
+                    <td className="p-2 text-stone-500 text-[11px] hidden lg:table-cell whitespace-nowrap">{item.updatedAt}</td>
+                    <td className="p-2">
+                      <div className="flex items-center justify-end gap-0.5">
+                        <button
+                          onClick={() => setEditingItem(item)}
+                          title="Editar item"
+                          className="w-6 h-6 rounded-lg bg-stone-100 hover:bg-orange-100 hover:text-orange-700 text-stone-600 grid place-items-center transition"
+                        >
+                          <Edit3 size={12} />
+                        </button>
+                        {/* Botón de cross-use: si está en productos y NO es insumo,
+                            permite "agregar a insumos". Si ya es ambos, permite quitar
+                            el flag del OTRO tab (es decir, dejarlo solo en el tab actual). */}
+                        {(() => {
+                          const otherFlag = activeTab === "products" ? "isSupply" : "isProduct";
+                          const isAlsoOther = item[otherFlag];
+                          const ToggleIcon = activeTab === "products" ? Boxes : Package;
+                          return (
+                            <button
+                              onClick={() => toggleCrossUse(item)}
+                              title={isAlsoOther
+                                ? (activeTab === "products" ? "Quitar de insumos (sigue siendo producto)" : "Quitar de productos (sigue siendo insumo)")
+                                : (activeTab === "products" ? "Agregar también a insumos para servicios" : "Agregar también a productos para venta")}
+                              className={`w-6 h-6 rounded-lg grid place-items-center transition ${
+                                isAlsoOther
+                                  ? "bg-cyan-100 hover:bg-cyan-200 text-cyan-700"
+                                  : "bg-stone-100 hover:bg-cyan-100 hover:text-cyan-700 text-stone-600"
+                              }`}
+                            >
+                              <ToggleIcon size={12} />
+                            </button>
+                          );
+                        })()}
+                        <button
+                          onClick={() => toggleHidden(item)}
+                          title={item.hidden ? "Mostrar en listas" : "Ocultar de listas (sin eliminar)"}
+                          className={`w-6 h-6 rounded-lg grid place-items-center transition ${
+                            item.hidden
+                              ? "bg-amber-100 hover:bg-amber-200 text-amber-700"
+                              : "bg-stone-100 hover:bg-indigo-100 hover:text-indigo-700 text-stone-600"
+                          }`}
+                        >
+                          {item.hidden ? <EyeOff size={12} /> : <Eye size={12} />}
+                        </button>
+                        <button
+                          onClick={() => setDeletingItem(item)}
+                          title="Eliminar item"
+                          className="w-6 h-6 rounded-lg bg-stone-100 hover:bg-red-100 hover:text-red-700 text-stone-600 grid place-items-center transition"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        <div className="px-3 py-2 bg-stone-50 border-t border-stone-200 text-xs text-stone-600">
+          {filteredItems.length} de {dataset.length} items · Valor total filtrado: <strong>${stats.totalValue.toLocaleString(undefined, { maximumFractionDigits: 2 })}</strong>
+        </div>
+      </div>
+
+      {/* Movimientos recientes — sección colapsable */}
+      <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
+        <button
+          onClick={() => setShowMovements(v => !v)}
+          className="w-full px-5 py-4 flex items-center gap-3 hover:bg-stone-50 transition"
+        >
+          <div className="w-9 h-9 rounded-lg bg-purple-100 text-purple-700 grid place-items-center flex-shrink-0">
+            <History size={16} />
+          </div>
+          <div className="flex-1 text-left">
+            <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">Auditoría</div>
+            <div className="font-serif text-base font-semibold">Movimientos recientes</div>
+          </div>
+          <div className="text-xs text-stone-500">{INVENTORY_MOVEMENTS.length} eventos</div>
+          <ChevronDown size={16} className={`text-stone-400 transition-transform ${showMovements ? "rotate-180" : ""}`} />
+        </button>
+        {showMovements && (
+          <div className="border-t border-stone-200 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-stone-50">
+                <tr className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">
+                  <th className="text-left p-3">Fecha</th>
+                  <th className="text-left p-3">Tipo</th>
+                  <th className="text-left p-3">Item</th>
+                  <th className="text-right p-3">Cantidad</th>
+                  <th className="text-left p-3">Motivo</th>
+                  <th className="text-left p-3">Usuario</th>
+                </tr>
+              </thead>
+              <tbody>
+                {INVENTORY_MOVEMENTS.map(mov => {
+                  const typeColor = mov.type === "entrada" ? "bg-emerald-100 text-emerald-800" :
+                                    mov.type === "salida" ? "bg-blue-100 text-blue-800" :
+                                    "bg-amber-100 text-amber-800";
+                  const TypeIcon = mov.type === "entrada" ? TrendingUp : mov.type === "salida" ? TrendingDown : Edit3;
+                  return (
+                    <tr key={mov.id} className="border-b border-stone-100 hover:bg-stone-50">
+                      <td className="p-3 text-stone-600 text-xs">{mov.date}</td>
+                      <td className="p-3">
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded inline-flex items-center gap-1 ${typeColor}`}>
+                          <TypeIcon size={9} />
+                          {mov.type}
+                        </span>
+                      </td>
+                      <td className="p-3 text-stone-900 font-semibold">{mov.itemName}</td>
+                      <td className="p-3 text-right">
+                        <span className={`font-bold ${mov.qty > 0 ? "text-emerald-700" : "text-red-700"}`}>
+                          {mov.qty > 0 ? "+" : ""}{mov.qty}
+                        </span>
+                      </td>
+                      <td className="p-3 text-stone-600 text-xs">{mov.reason}</td>
+                      <td className="p-3 text-stone-600 text-xs">{mov.user}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* === Modal: nuevo item de inventario === */}
+      {showItemModal && (
+        <InventoryItemModal
+          type={activeTab}
+          modules={modules}
+          sedes={sedes}
+          userSedeIds={user?.sedeIds || []}
+          userName={user?.name || "Operador"}
+          existingSkus={items.map(i => i.sku)}
+          onClose={() => setShowItemModal(false)}
+          onCreate={(newItem) => {
+            // Marcar el item con el flag del tab activo. Al crear desde productos,
+            // arranca como producto puro. Después se puede activar isSupply con el
+            // botón "agregar a insumos" en la fila.
+            const itemWithFlags = {
+              ...newItem,
+              isProduct: activeTab === "products",
+              isSupply: activeTab === "supplies",
+            };
+            setItems(prev => [itemWithFlags, ...prev]);
+            setShowItemModal(false);
+          }}
+        />
+      )}
+
+      {/* === Modal: editar item existente ===
+          Reusamos el mismo InventoryItemModal pero pasando existingItem.
+          El modal sabe que es edición porque existingItem !== null. */}
+      {editingItem && (
+        <InventoryItemModal
+          type={activeTab}
+          modules={modules}
+          sedes={sedes}
+          userSedeIds={user?.sedeIds || []}
+          userName={user?.name || "Operador"}
+          existingSkus={items.map(i => i.sku)}
+          existingItem={editingItem}
+          onClose={() => setEditingItem(null)}
+          onCreate={(updatedItem) => {
+            // En modo edición, preservamos los flags isProduct/isSupply del item original
+            // (no se modifican desde el form, solo desde el botón de "convertir" en la fila).
+            setItems(prev => prev.map(i => i.id === updatedItem.id
+              ? { ...updatedItem, isProduct: i.isProduct, isSupply: i.isSupply }
+              : i
+            ));
+            setEditingItem(null);
+          }}
+        />
+      )}
+
+      {/* === Modal: confirmación de eliminación === */}
+      {deletingItem && (
+        <div
+          onClick={() => setDeletingItem(null)}
+          className="fixed inset-0 bg-stone-900/80 z-50 flex justify-center items-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden"
+          >
+            <div className="p-5 border-b border-stone-200 bg-red-50 flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-red-100 text-red-700 grid place-items-center flex-shrink-0">
+                <AlertTriangle size={18} />
+              </div>
+              <div>
+                <div className="text-xs tracking-widest uppercase text-red-700 font-semibold">Eliminar</div>
+                <h3 className="font-serif text-lg font-semibold">¿Eliminar este item?</h3>
+              </div>
+            </div>
+            <div className="p-5 space-y-3 text-sm text-stone-700">
+              <p>
+                Estás a punto de eliminar <strong>{deletingItem.name}</strong> ({deletingItem.sku}) del inventario.
+              </p>
+              <p className="text-xs text-stone-500">
+                Esta acción no se puede deshacer. Los movimientos históricos quedarán como referencia pero el item desaparecerá del catálogo.
+              </p>
+            </div>
+            <div className="p-4 border-t border-stone-200 flex gap-2 bg-stone-50">
+              <button
+                onClick={() => setDeletingItem(null)}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-white border border-stone-200 hover:border-stone-400 text-stone-700 text-sm font-semibold transition"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  setItems(prev => prev.filter(i => i.id !== deletingItem.id));
+                  setDeletingItem(null);
+                }}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-semibold transition flex items-center justify-center gap-2"
+              >
+                <Trash2 size={14} />
+                Eliminar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ========== MODAL: Nuevo item de inventario ==========
+// Formulario completo para crear productos o insumos.
+// Campos: nombre, SKU/código de barras, categoría, proveedor, stock inicial,
+// stock mínimo, precio o costo, sede, CRM, foto opcional, notas adicionales.
+// Validaciones: nombre y SKU obligatorios, SKU único, stock no negativo.
+function InventoryItemModal({ type, modules = [], sedes = [], userSedeIds = [], userName, existingSkus = [], onClose, onCreate, existingItem = null }) {
+  const isProduct = type === "products";
+  const isEditing = !!existingItem;
+
+  // En modo edición, prerellenamos con los valores del item
+  const [name, setName] = useState(existingItem?.name || "");
+  const [sku, setSku] = useState(existingItem?.sku || "");
+  const [category, setCategory] = useState(existingItem?.category || "");
+  const [supplier, setSupplier] = useState(existingItem?.supplier === "—" ? "" : (existingItem?.supplier || ""));
+  const [stock, setStock] = useState(existingItem?.stock != null ? String(existingItem.stock) : "");
+  const [minStock, setMinStock] = useState(existingItem?.minStock != null ? String(existingItem.minStock) : "");
+  const [priceOrCost, setPriceOrCost] = useState(() => {
+    const v = isProduct ? existingItem?.price : existingItem?.cost;
+    return v != null ? String(v) : "";
+  });
+  const [sedeId, setSedeId] = useState(() => {
+    if (existingItem?.sedeId) return existingItem.sedeId;
+    if (userSedeIds && userSedeIds.length === 1) return userSedeIds[0];
+    return (sedes || []).find(s => s.isDefault)?.id || (sedes || [])[0]?.id || "";
+  });
+  const [moduleId, setModuleId] = useState(existingItem?.moduleId || "");
+  const [photo, setPhoto] = useState(existingItem?.photo || null);
+  const [notes, setNotes] = useState(existingItem?.notes || "");
+  const [error, setError] = useState("");
+  // Campos específicos de medicamentos
+  const [requiresRecipe, setRequiresRecipe] = useState(existingItem?.requiresRecipe || false);
+  const [presentation, setPresentation] = useState(existingItem?.presentation || "");
+  const [indication, setIndication] = useState(existingItem?.indication || "");
+  const isMedicamento = category.toLowerCase().includes("medicamento");
+
+  const availableSedes = useMemo(() => {
+    if (!userSedeIds || userSedeIds.length === 0) return sedes || [];
+    return (sedes || []).filter(s => userSedeIds.includes(s.id));
+  }, [sedes, userSedeIds]);
+
+  const availableModules = useMemo(() => {
+    return (modules || []).filter(m => !m.removed && m.sedeId === sedeId);
+  }, [modules, sedeId]);
+
+  useEffect(() => {
+    if (moduleId && !availableModules.find(m => m.id === moduleId)) {
+      setModuleId("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sedeId]);
+
+  const handlePhotoUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setError("La foto es muy grande (máximo 2 MB).");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setPhoto(reader.result);
+    reader.readAsDataURL(file);
+  };
+
+  const handleSubmit = () => {
+    setError("");
+    if (!name.trim()) { setError("El nombre es obligatorio."); return; }
+    if (!sku.trim()) { setError("El SKU / código de barras es obligatorio."); return; }
+    // En edición, permitimos el mismo SKU del item original; solo bloqueamos si choca con OTRO.
+    const otherSkus = isEditing ? existingSkus.filter(s => s !== existingItem.sku) : existingSkus;
+    if (otherSkus.includes(sku.trim())) { setError("Ya existe otro item con ese SKU."); return; }
+    if (!category.trim()) { setError("La categoría es obligatoria."); return; }
+    if (!sedeId) { setError("Selecciona una sede."); return; }
+    const stockNum = parseInt(stock) || 0;
+    const minStockNum = parseInt(minStock) || 0;
+    const priceNum = parseFloat(priceOrCost) || 0;
+    if (stockNum < 0) { setError("El stock no puede ser negativo."); return; }
+    if (minStockNum < 0) { setError("El stock mínimo no puede ser negativo."); return; }
+    if (priceNum <= 0) { setError(`El ${isProduct ? "precio" : "costo"} debe ser mayor a 0.`); return; }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const item = {
+      id: isEditing ? existingItem.id : `${isProduct ? "prod" : "sup"}-${Date.now().toString(36)}`,
+      sku: sku.trim(),
+      name: name.trim(),
+      category: category.trim(),
+      supplier: supplier.trim() || "—",
+      stock: stockNum,
+      minStock: minStockNum,
+      [isProduct ? "price" : "cost"]: priceNum,
+      sedeId,
+      moduleId: moduleId || null,
+      photo,
+      notes: notes.trim() || null,
+      updatedAt: today,
+      createdBy: isEditing ? (existingItem.createdBy || userName) : userName,
+      lastEditedBy: isEditing ? userName : undefined,
+      // Campos de medicamento (solo si la categoría es "Medicamento")
+      ...(isMedicamento ? {
+        requiresRecipe,
+        presentation: presentation.trim() || null,
+        indication: indication.trim() || null,
+      } : {}),
+    };
+    onCreate(item);
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      className="fixed inset-0 bg-stone-900/80 z-50 flex justify-center items-center p-4"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] shadow-2xl overflow-hidden flex flex-col"
+      >
+        <div className={`p-5 border-b border-stone-200 flex items-center gap-3 ${isProduct ? "bg-orange-50" : "bg-emerald-50"}`}>
+          <div className={`w-11 h-11 rounded-xl grid place-items-center text-white flex-shrink-0 ${
+            isProduct ? "bg-gradient-to-br from-orange-500 to-orange-700" : "bg-gradient-to-br from-emerald-500 to-emerald-700"
+          }`}>
+            {isProduct ? <Package size={20} /> : <Boxes size={20} />}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className={`text-xs tracking-widest uppercase font-bold ${isProduct ? "text-orange-700" : "text-emerald-700"}`}>
+              {isEditing ? "Editar" : "Nuevo"} {isProduct ? "producto" : "insumo"}
+            </div>
+            <h3 className="font-serif text-xl font-semibold">
+              {isEditing ? existingItem.name : "Agregar al inventario"}
+            </h3>
+          </div>
+          <button onClick={onClose} className="w-9 h-9 rounded-lg bg-white hover:bg-stone-100 border border-stone-200 grid place-items-center text-stone-600">
+            <X size={14} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          {error && (
+            <div className="bg-red-50 border border-red-300 text-red-800 text-sm px-3 py-2 rounded-lg flex items-center gap-2">
+              <AlertCircle size={14} className="flex-shrink-0" />
+              {error}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">Identidad</div>
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 mb-1">Nombre *</label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Ej: Royal Canin Maxi Adult 15kg"
+                className="w-full px-3 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-500"
+              />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-semibold text-stone-700 mb-1 flex items-center gap-1">
+                  <Barcode size={11} /> SKU / Código de barras *
+                </label>
+                <input
+                  value={sku}
+                  onChange={(e) => setSku(e.target.value)}
+                  placeholder="7501032450012"
+                  className="w-full px-3 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-500 font-mono"
+                />
+                <div className="text-[10px] text-stone-500 mt-0.5">Único por item.</div>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1">Categoría *</label>
+                <input
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  placeholder={isProduct ? "Ej: Alimento, Accesorios..." : "Ej: Material médico, Insumo grooming..."}
+                  list={isProduct ? "product-categories" : "supply-categories"}
+                  className="w-full px-3 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-500"
+                />
+                {/* Categorías comunes de PRODUCTOS para venta */}
+                <datalist id="product-categories">
+                  <option value="Alimento seco" />
+                  <option value="Alimento húmedo" />
+                  <option value="Snacks y premios" />
+                  <option value="Higiene" />
+                  <option value="Accesorios" />
+                  <option value="Juguetes" />
+                  <option value="Camas y descanso" />
+                  <option value="Collares y correas" />
+                  <option value="Medicamento" />
+                  <option value="Medicamento OTC" />
+                  <option value="Suplementos" />
+                  <option value="Arena sanitaria" />
+                  <option value="Transportadoras" />
+                </datalist>
+                {/* Categorías comunes de INSUMOS para servicios internos */}
+                <datalist id="supply-categories">
+                  <option value="Material médico" />
+                  <option value="Material quirúrgico" />
+                  <option value="Anestesia" />
+                  <option value="Medicamento clínico" />
+                  <option value="Vacunas" />
+                  <option value="Material de laboratorio" />
+                  <option value="Curaciones" />
+                  <option value="Insumo grooming" />
+                  <option value="Productos de baño" />
+                  <option value="Tijeras y cuchillas" />
+                  <option value="Limpieza e higiene local" />
+                  <option value="Papelería clínica" />
+                </datalist>
+              </div>
+            </div>
+
+            {/* === Campos de medicamento (solo si la categoría es Medicamento) === */}
+            {isMedicamento && (
+              <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 space-y-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <Pill size={14} className="text-purple-700" />
+                  <span className="text-xs font-bold text-purple-800 uppercase tracking-wider">Información de medicamento</span>
+                </div>
+                {/* Toggle de recipe */}
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setRequiresRecipe(!requiresRecipe)}
+                    className={`w-10 h-5 rounded-full relative transition flex-shrink-0 ${
+                      requiresRecipe ? "bg-red-500" : "bg-stone-300"
+                    }`}
+                  >
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition ${
+                      requiresRecipe ? "left-5" : "left-0.5"
+                    }`}></span>
+                  </button>
+                  <div>
+                    <div className="text-sm font-semibold text-stone-800">
+                      {requiresRecipe ? "Requiere recipe" : "No requiere recipe"}
+                    </div>
+                    <div className="text-xs text-stone-500">
+                      {requiresRecipe
+                        ? "Al vender este medicamento se pedirá adjuntar la prescripción médica."
+                        : "Se puede vender sin prescripción (OTC / venta libre)."}
+                    </div>
+                  </div>
+                </div>
+                {/* Presentación e indicación */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-purple-700 mb-0.5">Presentación</label>
+                    <input
+                      value={presentation}
+                      onChange={(e) => setPresentation(e.target.value)}
+                      placeholder="Ej: Comprimidos x14"
+                      className="w-full px-2.5 py-1.5 border border-purple-200 rounded-lg text-xs outline-none focus:border-purple-500 bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-purple-700 mb-0.5">Indicación</label>
+                    <input
+                      value={indication}
+                      onChange={(e) => setIndication(e.target.value)}
+                      placeholder="Ej: Antiinflamatorio"
+                      className="w-full px-2.5 py-1.5 border border-purple-200 rounded-lg text-xs outline-none focus:border-purple-500 bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+            <div>
+              <label className="block text-xs font-semibold text-stone-700 mb-1">Proveedor</label>
+              <input
+                value={supplier}
+                onChange={(e) => setSupplier(e.target.value)}
+                placeholder="Distribuidora o fabricante"
+                className="w-full px-3 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-500"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">Stock y {isProduct ? "precio" : "costo"}</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1">Stock inicial *</label>
+                <input type="number" min="0" value={stock} onChange={(e) => setStock(e.target.value)} placeholder="0"
+                  className="w-full px-3 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-500" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1">Stock mínimo</label>
+                <input type="number" min="0" value={minStock} onChange={(e) => setMinStock(e.target.value)} placeholder="5"
+                  className="w-full px-3 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-500" />
+                <div className="text-[10px] text-stone-500 mt-0.5">Alerta de reposición</div>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-stone-700 mb-1">{isProduct ? "Precio venta" : "Costo unitario"} *</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-500 text-sm">$</span>
+                  <input type="number" min="0" step="0.01" value={priceOrCost} onChange={(e) => setPriceOrCost(e.target.value)} placeholder="0.00"
+                    className="w-full pl-7 pr-3 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-500" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">Asignación</div>
+            <div>
+              <label className="text-xs font-semibold text-stone-700 mb-1 flex items-center gap-1">
+                <MapPin size={11} /> Sede *
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {availableSedes.map(sede => (
+                  <button key={sede.id} onClick={() => setSedeId(sede.id)}
+                    className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition flex items-center gap-1 ${
+                      sedeId === sede.id ? "bg-orange-600 text-white shadow"
+                        : "bg-stone-50 border border-stone-200 text-stone-700 hover:border-orange-400"
+                    }`}>
+                    <MapPin size={10} /> {sede.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-stone-700 mb-1 flex items-center gap-1">
+                <LayoutGrid size={11} /> CRM asociado (opcional)
+              </label>
+              {availableModules.length === 0 ? (
+                <div className="text-xs text-stone-500 italic px-3 py-2 bg-stone-50 rounded-lg">
+                  No hay CRMs configurados en esta sede.
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  <button onClick={() => setModuleId("")}
+                    className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition ${
+                      moduleId === "" ? "bg-stone-900 text-white"
+                        : "bg-stone-50 border border-stone-200 text-stone-700 hover:border-stone-400"
+                    }`}>
+                    Sin asociar
+                  </button>
+                  {availableModules.map(m => (
+                    <button key={m.id} onClick={() => setModuleId(m.id)}
+                      className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition ${
+                        moduleId === m.id ? "bg-orange-600 text-white shadow"
+                          : "bg-stone-50 border border-stone-200 text-stone-700 hover:border-orange-400"
+                      }`}>
+                      {m.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="text-[10px] text-stone-500 mt-0.5">
+                Si lo asocias, el item solo aparece cuando se filtra ese CRM. "Sin asociar" lo deja visible en toda la sede.
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">Foto (opcional)</div>
+            {photo ? (
+              <div className="relative inline-block">
+                <img src={photo} alt="Preview" className="w-32 h-32 object-cover rounded-lg border border-stone-200" />
+                <button onClick={() => setPhoto(null)}
+                  className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-red-600 hover:bg-red-700 text-white grid place-items-center shadow-lg"
+                  title="Quitar foto">
+                  <X size={11} />
+                </button>
+              </div>
+            ) : (
+              <label className="inline-flex flex-col items-center justify-center w-32 h-32 border-2 border-dashed border-stone-300 hover:border-orange-400 rounded-lg cursor-pointer bg-stone-50 hover:bg-orange-50 transition">
+                <Plus size={18} className="text-stone-400 mb-1" />
+                <span className="text-[10px] text-stone-500 font-semibold">Subir foto</span>
+                <span className="text-[9px] text-stone-400 mt-0.5">JPG/PNG · máx 2 MB</span>
+                <input type="file" accept="image/*" onChange={handlePhotoUpload} className="hidden" />
+              </label>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">Información adicional (opcional)</div>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)}
+              placeholder="Notas internas, advertencias, condiciones de almacenamiento, fecha de vencimiento, etc."
+              rows={3}
+              className="w-full px-3 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-500 resize-none" />
+          </div>
+        </div>
+
+        <div className="p-4 border-t border-stone-200 flex gap-2 bg-stone-50">
+          <button onClick={onClose}
+            className="flex-1 px-4 py-2.5 rounded-xl bg-white border border-stone-200 hover:border-stone-400 text-stone-700 text-sm font-semibold transition">
+            Cancelar
+          </button>
+          <button onClick={handleSubmit}
+            className={`flex-1 px-4 py-2.5 rounded-xl text-white text-sm font-semibold transition flex items-center justify-center gap-2 ${
+              isProduct ? "bg-orange-600 hover:bg-orange-700" : "bg-emerald-600 hover:bg-emerald-700"
+            }`}>
+            <Check size={14} />
+            {isEditing ? "Guardar cambios" : `Crear ${isProduct ? "producto" : "insumo"}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsView({ userRole = "super", clients = [], passports = [], invoices = [], services = [], agendaEvents = [], groomingBookings = [], conversations = {}, modules = [], customRoles = [], users = [] }) {
+  // Solo super (las analíticas pueden contener info comercial sensible)
+  if (userRole !== "super") {
+    return (
+      <div className="max-w-2xl mx-auto pt-8 text-center">
+        <Lock size={32} className="text-stone-300 mx-auto mb-3" />
+        <div className="font-serif text-xl font-semibold text-stone-700">Acceso restringido</div>
+        <div className="text-sm text-stone-500 mt-1">
+          La sección de Analíticas es exclusiva del super usuario.
+        </div>
+      </div>
+    );
+  }
+
+  // === Helpers comunes ===
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const formatMoney = (n) => `$${Number(n || 0).toLocaleString()}`;
+  const formatMoneyK = (n) => {
+    const v = Number(n || 0);
+    if (Math.abs(v) >= 1000) return `$${(v / 1000).toFixed(1)}k`;
+    return `$${v}`;
+  };
+  const pct = (part, total) => {
+    if (!total) return 0;
+    return Math.round((part / total) * 100);
+  };
+
+  // === KPI: Operación ===
+  const opStats = useMemo(() => {
+    const todayEvents = agendaEvents.filter(e => e.date === todayISO);
+    const week7 = agendaEvents.filter(e => {
+      const d = new Date(e.date);
+      const diff = (d - new Date(todayISO)) / (1000 * 60 * 60 * 24);
+      return diff >= 0 && diff < 7;
+    });
+    const byType = {};
+    agendaEvents.forEach(e => { byType[e.type] = (byType[e.type] || 0) + 1; });
+    const pendingWeb = agendaEvents.filter(e => e.fromWeb === true && e.pendingApproval).length;
+    return {
+      total: agendaEvents.length,
+      today: todayEvents.length,
+      week: week7.length,
+      byType,
+      pendingWeb,
+      activeModules: (modules || []).filter(m => !m.removed).length,
+      installedModules: (modules || []).length,
+    };
+  }, [agendaEvents, modules, todayISO]);
+
+  // === KPI: Finanzas ===
+  const finStats = useMemo(() => {
+    let totalRevenue = 0;
+    let totalPaid = 0;
+    let totalDebt = 0;
+    let countToday = 0;
+    const byMonth = {}; // 'YYYY-MM' → total
+    invoices.forEach(inv => {
+      const total = Number(inv.total || 0);
+      totalRevenue += total;
+      const paid = Number(inv.paid !== undefined ? inv.paid : (inv.status === "paid" ? total : 0));
+      totalPaid += paid;
+      totalDebt += Math.max(0, total - paid);
+      if (inv.date === todayISO) countToday++;
+      const mo = (inv.date || "").slice(0, 7);
+      if (mo) byMonth[mo] = (byMonth[mo] || 0) + total;
+    });
+    const avgTicket = invoices.length ? Math.round(totalRevenue / invoices.length) : 0;
+    // Top 5 servicios recibodos (por número de líneas)
+    const svcCounts = {};
+    invoices.forEach(inv => {
+      (inv.items || []).forEach(it => {
+        if (it.type === "service") {
+          const key = it.name;
+          svcCounts[key] = (svcCounts[key] || 0) + (it.qty || 1);
+        }
+      });
+    });
+    const topServices = Object.entries(svcCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+    return {
+      totalRevenue,
+      totalPaid,
+      totalDebt,
+      countToday,
+      invoiceCount: invoices.length,
+      avgTicket,
+      byMonth,
+      topServices,
+      paymentRate: pct(totalPaid, totalRevenue),
+    };
+  }, [invoices, todayISO]);
+
+  // === KPI: Clientes ===
+  const cliStats = useMemo(() => {
+    const segments = {};
+    clients.forEach(c => {
+      const seg = c.segment || "Sin segmento";
+      segments[seg] = (segments[seg] || 0) + 1;
+    });
+    const quickRegs = clients.filter(c => c.quickRegistration === true).length;
+    const withDebt = clients.filter(c => {
+      const debt = (invoices || [])
+        .filter(i => i.clientId === c.id)
+        .reduce((acc, i) => acc + Math.max(0, Number(i.total || 0) - Number(i.paid || 0)), 0);
+      return debt > 0;
+    }).length;
+    // Top 5 clientes por recibos
+    const cliRev = {};
+    invoices.forEach(inv => {
+      if (inv.clientId) cliRev[inv.clientId] = (cliRev[inv.clientId] || 0) + Number(inv.total || 0);
+    });
+    const topClients = Object.entries(cliRev)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([id, total]) => ({
+        client: clients.find(c => c.id === id),
+        total,
+      }))
+      .filter(x => x.client);
+    return {
+      total: clients.length,
+      segments,
+      quickRegs,
+      withDebt,
+      totalPets: passports.length,
+      avgPetsPerClient: clients.length ? (passports.length / clients.length).toFixed(1) : "0",
+      topClients,
+    };
+  }, [clients, passports, invoices]);
+
+  // === KPI: Pasaportes clínicos ===
+  const passportStats = useMemo(() => {
+    const bySpecies = {};
+    let totalEvents = 0;
+    let dewormings = 0;
+    let vaccinations = 0;
+    let consultations = 0;
+    passports.forEach(p => {
+      bySpecies[p.species || "otros"] = (bySpecies[p.species || "otros"] || 0) + 1;
+      const events = p.events || [];
+      totalEvents += events.length;
+      events.forEach(e => {
+        if (e.type === "deworming" || e.type === "desparasitacion") dewormings++;
+        else if (e.type === "vacuna" || e.type === "vaccination") vaccinations++;
+        else if (e.type === "consulta" || e.type === "consultation" || e.type === "vet") consultations++;
+      });
+    });
+    return { total: passports.length, bySpecies, totalEvents, dewormings, vaccinations, consultations };
+  }, [passports]);
+
+  // === KPI: Equipo y permisos ===
+  const teamStats = useMemo(() => {
+    const activeUsers = (users || []).filter(u => u.active !== false).length;
+    const totalRoles = 4 + (customRoles || []).length; // 4 base + customs
+    return {
+      totalUsers: (users || []).length,
+      activeUsers,
+      totalRoles,
+      customRoles: (customRoles || []).length,
+    };
+  }, [users, customRoles]);
+
+  // === KPI: Mensajería ===
+  const msgStats = useMemo(() => {
+    let totalConvs = 0;
+    let totalMsgs = 0;
+    let unread = 0;
+    Object.values(conversations || {}).forEach(conv => {
+      totalConvs++;
+      const msgs = conv.messages || [];
+      totalMsgs += msgs.length;
+      unread += msgs.filter(m => m.unread === true).length;
+    });
+    return { totalConvs, totalMsgs, unread };
+  }, [conversations]);
+
+  return (
+    <div className="space-y-3">
+      {/* Banda informativa con timestamp + recordatorio de tooltips.
+          Antes vivía dentro del hero — ahora es una banda mínima al inicio. */}
+      <div className="flex items-center justify-between gap-3 flex-wrap text-xs text-stone-500">
+        <span className="flex items-center gap-1.5">
+          <Info size={12} />
+          Pasá el mouse sobre el ícono <span className="inline-block w-4 h-4 align-middle bg-stone-200 text-stone-600 rounded-full text-[10px] font-bold leading-4 text-center">i</span> de cada métrica para ver cómo se calcula.
+        </span>
+        <span className="font-mono">
+          Última actualización · {new Date().toLocaleString("es", { dateStyle: "short", timeStyle: "short" })}
+        </span>
+      </div>
+
+      {/* === Sección: Finanzas === */}
+      <AnalyticsSection title="Finanzas" subtitle="Resumen de recibos y cobro" icon={DollarSign} accent="emerald">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+          <AnalyticsKpi
+            label="Recibos total"
+            value={formatMoneyK(finStats.totalRevenue)}
+            sublabel={`${finStats.invoiceCount} recibo${finStats.invoiceCount === 1 ? "" : "s"} emitida${finStats.invoiceCount === 1 ? "" : "s"}`}
+            accent="emerald"
+            Icon={TrendingUp}
+            info="Suma del campo `total` de todas las recibos del sistema (cobradas y pendientes). Fuente: Ventas → módulo de recibos."
+          />
+          <AnalyticsKpi
+            label="Cobrado"
+            value={formatMoneyK(finStats.totalPaid)}
+            sublabel={`${finStats.paymentRate}% del total recibodo`}
+            accent="blue"
+            Icon={CheckCircle}
+            info="Suma del campo `paid` de las recibos. Si una recibo no tiene campo paid se asume cobrada cuando su status es 'paid'. Fuente: Ventas → cobros registrados."
+          />
+          <AnalyticsKpi
+            label="Deuda pendiente"
+            value={formatMoneyK(finStats.totalDebt)}
+            sublabel={`${cliStats.withDebt} cliente${cliStats.withDebt === 1 ? "" : "s"} con saldo`}
+            accent={finStats.totalDebt > 0 ? "red" : "stone"}
+            Icon={AlertTriangle}
+            info="Diferencia entre `total` y `paid` de cada recibo, sumada. Solo cuenta diferencias positivas (no se restan los pagos en exceso). Fuente: Ventas → recibos no canceladas en su totalidad."
+          />
+          <AnalyticsKpi
+            label="Ticket promedio"
+            value={formatMoney(finStats.avgTicket)}
+            sublabel={`Sobre ${finStats.invoiceCount} recibo${finStats.invoiceCount === 1 ? "" : "s"}`}
+            accent="violet"
+            Icon={Receipt}
+            info="Recibos total dividida entre el número de recibos emitidas. No filtra por cliente ni período — incluye toda la historia disponible."
+          />
+        </div>
+
+        {/* Top 5 servicios recibodos */}
+        {finStats.topServices.length > 0 && (
+          <div className="mt-2 bg-white border border-stone-200 rounded-xl px-3 py-2">
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold">Top 5 servicios recibodos</span>
+                <InfoIcon tooltip="Cuenta cuántas veces aparece cada servicio (tipo=service) en las líneas de recibo, sumando la cantidad (qty)." />
+              </div>
+              <span className="text-[10px] text-stone-400">Por unidades</span>
+            </div>
+            <div className="space-y-0.5">
+              {finStats.topServices.map(([name, count], i) => {
+                const max = finStats.topServices[0][1];
+                const w = pct(count, max);
+                return (
+                  <div key={name} className="flex items-center gap-2">
+                    <span className="w-4 text-[11px] font-bold text-stone-400 text-right flex-shrink-0">{i + 1}</span>
+                    <div className="flex-1 min-w-0 relative">
+                      <div className="absolute inset-0 h-full bg-stone-100 rounded">
+                        <div className="h-full bg-gradient-to-r from-emerald-200 to-emerald-300 rounded transition-all" style={{ width: `${w}%` }} />
+                      </div>
+                      <div className="relative flex items-center justify-between gap-2 px-2 py-0.5">
+                        <span className="text-xs font-medium truncate text-stone-800">{name}</span>
+                        <span className="text-[11px] font-mono font-bold text-stone-700 flex-shrink-0">{count}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </AnalyticsSection>
+
+      {/* === Sección: Clientes === */}
+      <AnalyticsSection title="Clientes" subtitle="Tutores registrados y composición" icon={Users} accent="orange">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+          <AnalyticsKpi
+            label="Clientes totales"
+            value={cliStats.total}
+            sublabel={`${cliStats.totalPets} mascotas registradas`}
+            accent="orange"
+            Icon={Users}
+            info="Cuenta de registros en la tabla de clientes (tutores). Incluye registros rápidos (sin ficha completa) y completos."
+          />
+          <AnalyticsKpi
+            label="Mascotas por cliente"
+            value={cliStats.avgPetsPerClient}
+            sublabel={`${cliStats.totalPets} mascotas / ${cliStats.total} clientes`}
+            accent="violet"
+            Icon={PawPrint}
+            info="Promedio de mascotas registradas por cada cliente. Total de pasaportes dividido entre total de clientes."
+          />
+          <AnalyticsKpi
+            label="Registros rápidos"
+            value={cliStats.quickRegs}
+            sublabel={`${pct(cliStats.quickRegs, cliStats.total)}% sin ficha completa`}
+            accent="amber"
+            Icon={Zap}
+            info="Clientes creados con el flujo de Registro Rápido (solo cédula+teléfono+dirección, sin datos clínicos). Identificados por el flag `quickRegistration=true`."
+          />
+          <AnalyticsKpi
+            label="Con deuda activa"
+            value={cliStats.withDebt}
+            sublabel={cliStats.total ? `${pct(cliStats.withDebt, cliStats.total)}% de los clientes` : "—"}
+            accent={cliStats.withDebt > 0 ? "red" : "stone"}
+            Icon={AlertTriangle}
+            info="Clientes con al menos una recibo cuyo saldo (total - paid) es mayor a cero. Fuente: Ventas → recibos no canceladas en su totalidad."
+          />
+        </div>
+
+        {/* Segmentación — chips horizontales compactos en lugar de cards grandes */}
+        {Object.keys(cliStats.segments).length > 0 && (
+          <div className="mt-2 bg-white border border-stone-200 rounded-xl px-3 py-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1 mr-1">
+                <span className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold">Por segmento</span>
+                <InfoIcon tooltip="Agrupa clientes según su campo `segment` (Premium / Frecuente / Nuevo / Institucional / Express)." />
+              </div>
+              {Object.entries(cliStats.segments).map(([seg, count]) => (
+                <div key={seg} className="flex items-center gap-1.5 bg-stone-50 border border-stone-200 rounded-lg px-2 py-1">
+                  <span className="text-xs text-stone-600">{seg}</span>
+                  <span className="font-mono text-sm font-bold text-stone-800">{count}</span>
+                  <span className="text-[10px] text-stone-400">·{pct(count, cliStats.total)}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Top 5 clientes — barras más finas, todo en una sola row por cliente */}
+        {cliStats.topClients.length > 0 && (
+          <div className="mt-2 bg-white border border-stone-200 rounded-xl px-3 py-2">
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <span className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold">Top 5 clientes por recibos</span>
+              <InfoIcon tooltip="Suma del campo `total` de todas las recibos de cada cliente (por clientId). Ordenado descendente." />
+            </div>
+            <div className="space-y-0.5">
+              {cliStats.topClients.map(({ client, total }, i) => {
+                const max = cliStats.topClients[0].total;
+                const w = pct(total, max);
+                return (
+                  <div key={client.id} className="flex items-center gap-2">
+                    <span className="w-4 text-[11px] font-bold text-stone-400 text-right flex-shrink-0">{i + 1}</span>
+                    <div className="flex-1 min-w-0 relative">
+                      {/* Barra de fondo + barra coloreada por debajo del texto */}
+                      <div className="absolute inset-0 h-full bg-stone-100 rounded">
+                        <div className="h-full bg-gradient-to-r from-orange-200 to-orange-300 rounded transition-all" style={{ width: `${w}%` }} />
+                      </div>
+                      <div className="relative flex items-center justify-between gap-2 px-2 py-0.5">
+                        <span className="text-xs font-medium truncate text-stone-800">{client.name}</span>
+                        <span className="text-[11px] font-mono font-bold text-emerald-700 flex-shrink-0">{formatMoneyK(total)}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </AnalyticsSection>
+
+      {/* === Sección: Operación y Agenda === */}
+      <AnalyticsSection title="Operación" subtitle="Agenda, ocupación y citas web" icon={Calendar} accent="blue">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+          <AnalyticsKpi
+            label="Citas hoy"
+            value={opStats.today}
+            sublabel={`${opStats.week} en los próximos 7 días`}
+            accent="blue"
+            Icon={Calendar}
+            info="Eventos de agenda con fecha=hoy, contando todos los tipos (vet, grooming, b2b, etc.). Fuente: Agenda → eventos del calendario maestro."
+          />
+          <AnalyticsKpi
+            label="Eventos totales"
+            value={opStats.total}
+            sublabel={`${opStats.byType.vet || 0} vet · ${opStats.byType.grooming || 0} grooming`}
+            accent="stone"
+            Icon={LayoutGrid}
+            info="Total histórico de eventos en agenda, sin filtro temporal. Útil para entender el volumen acumulado."
+          />
+          <AnalyticsKpi
+            label="Citas web pendientes"
+            value={opStats.pendingWeb}
+            sublabel={opStats.pendingWeb > 0 ? "Esperando aprobación" : "Sin pendientes"}
+            accent={opStats.pendingWeb > 0 ? "amber" : "stone"}
+            Icon={Clock}
+            info="Eventos con fromWeb=true y pendingApproval=true. Si el toggle de auto-aprobación está activo, este valor siempre será 0. Fuente: Citas reservadas desde el sitio público."
+          />
+          <AnalyticsKpi
+            label="Módulos activos"
+            value={opStats.activeModules}
+            sublabel={`de ${opStats.installedModules} instalados`}
+            accent="violet"
+            Icon={Layers}
+            info="Módulos que no están marcados como `removed`. Cada módulo es una instancia personalizable (Veterinaria, Grooming, B2B, etc.)."
+          />
+        </div>
+
+        {/* Bookings de grooming */}
+        <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="bg-white border border-stone-200 rounded-xl p-4">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs tracking-widest uppercase text-stone-500 font-semibold">Bookings de grooming</span>
+              <InfoIcon tooltip="Reservas activas en el módulo de Grooming Ops (excluyendo las canceladas/completadas). Fuente: groomingBookings." />
+            </div>
+            <div className="font-mono text-2xl font-bold text-stone-800 mt-2">
+              {groomingBookings.length}
+            </div>
+          </div>
+          <div className="bg-white border border-stone-200 rounded-xl p-4">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs tracking-widest uppercase text-stone-500 font-semibold">Conversaciones activas</span>
+              <InfoIcon tooltip="Hilos de chat con clientes (WhatsApp, IG, FB, chat interno). Cuenta la totalidad de conversaciones, sin filtrar por estado." />
+            </div>
+            <div className="font-mono text-2xl font-bold text-stone-800 mt-2">
+              {msgStats.totalConvs}
+            </div>
+            <div className="text-xs text-stone-500">
+              {msgStats.totalMsgs} mensajes · {msgStats.unread} sin leer
+            </div>
+          </div>
+          <div className="bg-white border border-stone-200 rounded-xl p-4">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs tracking-widest uppercase text-stone-500 font-semibold">Recibos hoy</span>
+              <InfoIcon tooltip="Recibos con campo date igual a hoy en formato YYYY-MM-DD. Útil para ver el ritmo del día." />
+            </div>
+            <div className="font-mono text-2xl font-bold text-stone-800 mt-2">
+              {finStats.countToday}
+            </div>
+          </div>
+        </div>
+      </AnalyticsSection>
+
+      {/* === Sección: Pasaportes clínicos === */}
+      <AnalyticsSection title="Pasaportes clínicos" subtitle="Eventos médicos registrados" icon={Stethoscope} accent="rose">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+          <AnalyticsKpi
+            label="Pasaportes"
+            value={passportStats.total}
+            sublabel={`${passportStats.totalEvents} eventos clínicos`}
+            accent="rose"
+            Icon={BookOpen}
+            info="Cuenta de mascotas con pasaporte clínico abierto. Cada pasaporte tiene su propio historial de eventos (consultas, vacunas, desparasitaciones)."
+          />
+          <AnalyticsKpi
+            label="Desparasitaciones"
+            value={passportStats.dewormings}
+            sublabel="Registros históricos"
+            accent="emerald"
+            Icon={ShieldCheck}
+            info="Eventos del pasaporte con type='deworming' o 'desparasitacion'. Fuente: ficha clínica → categoría Desparasitación."
+          />
+          <AnalyticsKpi
+            label="Vacunaciones"
+            value={passportStats.vaccinations}
+            sublabel="Registros históricos"
+            accent="blue"
+            Icon={Syringe}
+            info="Eventos del pasaporte con type='vacuna' o 'vaccination'. Fuente: ficha clínica → categoría Vacunación."
+          />
+          <AnalyticsKpi
+            label="Consultas"
+            value={passportStats.consultations}
+            sublabel="Registros históricos"
+            accent="orange"
+            Icon={Stethoscope}
+            info="Eventos con type='consulta', 'consultation' o 'vet'. Cada consulta puede incluir signos vitales, diagnóstico y tratamiento."
+          />
+        </div>
+
+        {/* Distribución por especie — chips horizontales con label en español */}
+        {Object.keys(passportStats.bySpecies).length > 0 && (
+          <div className="mt-2 bg-white border border-stone-200 rounded-xl px-3 py-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1 mr-1">
+                <span className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold">Por especie</span>
+                <InfoIcon tooltip="Agrupa los pasaportes según el campo `species` de cada mascota." />
+              </div>
+              {Object.entries(passportStats.bySpecies).map(([sp, count]) => {
+                // Traducir códigos internos a español
+                const labels = { dog: "Perro", cat: "Gato", bird: "Ave", rabbit: "Conejo", rodent: "Roedor", fish: "Pez", other: "Otros" };
+                return (
+                  <div key={sp} className="flex items-center gap-1.5 bg-stone-50 border border-stone-200 rounded-lg px-2 py-1">
+                    <span className="text-xs text-stone-600">{labels[sp] || sp}</span>
+                    <span className="font-mono text-sm font-bold text-stone-800">{count}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </AnalyticsSection>
+
+      {/* === Sección: Equipo === */}
+      <AnalyticsSection title="Equipo" subtitle="Usuarios y roles del sistema" icon={UserCheck} accent="violet">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+          <AnalyticsKpi
+            label="Usuarios totales"
+            value={teamStats.totalUsers}
+            sublabel={`${teamStats.activeUsers} activo${teamStats.activeUsers === 1 ? "" : "s"}`}
+            accent="violet"
+            Icon={Users}
+            info="Cuenta de cuentas en la tabla de usuarios. 'Activos' son los que tienen active != false."
+          />
+          <AnalyticsKpi
+            label="Roles configurados"
+            value={teamStats.totalRoles}
+            sublabel={`4 base + ${teamStats.customRoles} personalizado${teamStats.customRoles === 1 ? "" : "s"}`}
+            accent="emerald"
+            Icon={ShieldCheck}
+            info="Suma de los 4 roles base (Super, Vet, Groomer, Sales) más los roles custom creados desde Roles & Permisos."
+          />
+          <AnalyticsKpi
+            label="Servicios catálogo"
+            value={(services || []).length}
+            sublabel="Disponibles para cobrar"
+            accent="amber"
+            Icon={Tag}
+            info="Cuenta de servicios definidos en el catálogo (Veterinaria + Grooming + otros módulos). Solo cuenta los activos."
+          />
+          <AnalyticsKpi
+            label="Mensajes sin leer"
+            value={msgStats.unread}
+            sublabel={`En ${msgStats.totalConvs} conversaciones`}
+            accent={msgStats.unread > 0 ? "red" : "stone"}
+            Icon={MessageCircle}
+            info="Suma de mensajes con flag unread=true en todas las conversaciones del módulo de Mensajería."
+          />
+        </div>
+      </AnalyticsSection>
+    </div>
+  );
+}
+
+// === Subcomponentes de AnalyticsView ===
+
+// Sección con encabezado, icono y children
+function AnalyticsSection({ title, subtitle, icon: Icon, accent = "stone", children }) {
+  const accentMap = {
+    emerald: { bg: "bg-emerald-100", text: "text-emerald-700" },
+    blue:    { bg: "bg-blue-100",    text: "text-blue-700" },
+    orange:  { bg: "bg-orange-100",  text: "text-orange-700" },
+    violet:  { bg: "bg-violet-100",  text: "text-violet-700" },
+    rose:    { bg: "bg-rose-100",    text: "text-rose-700" },
+    stone:   { bg: "bg-stone-100",   text: "text-stone-700" },
+  }[accent] || { bg: "bg-stone-100", text: "text-stone-700" };
+  // Header compacto: ícono más chico (28px), título y subtítulo en una sola línea
+  // (subtítulo como aclaración pequeña a la derecha del título). Padding p-3 en vez de p-4.
+  return (
+    <div className="bg-white border border-stone-200 rounded-2xl shadow-sm overflow-hidden">
+      <div className="px-3 py-2 border-b border-stone-200 flex items-center gap-2.5">
+        <div className={`w-7 h-7 rounded-lg ${accentMap.bg} ${accentMap.text} grid place-items-center flex-shrink-0`}>
+          <Icon size={14} strokeWidth={1.8} />
+        </div>
+        <div className="flex-1 min-w-0 flex items-baseline gap-2 flex-wrap">
+          <span className={`text-[11px] tracking-widest uppercase font-semibold ${accentMap.text}`}>
+            {title}
+          </span>
+          <span className="text-xs text-stone-500 truncate">{subtitle}</span>
+        </div>
+      </div>
+      <div className="p-3">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// KPI individual con tooltip informativo
+// Layout horizontal compacto: ícono a la izquierda + label/value/sublabel apilados a la derecha.
+// Tomá menos espacio vertical que el layout antiguo (ícono arriba, todo apilado).
+function AnalyticsKpi({ label, value, sublabel, accent = "stone", Icon, info }) {
+  const accentMap = {
+    emerald: { bg: "bg-emerald-50", border: "border-emerald-200", iconBg: "bg-emerald-100", iconText: "text-emerald-700", valueText: "text-emerald-700" },
+    blue:    { bg: "bg-blue-50",    border: "border-blue-200",    iconBg: "bg-blue-100",    iconText: "text-blue-700",    valueText: "text-blue-700" },
+    orange:  { bg: "bg-orange-50",  border: "border-orange-200",  iconBg: "bg-orange-100",  iconText: "text-orange-700",  valueText: "text-orange-700" },
+    violet:  { bg: "bg-violet-50",  border: "border-violet-200",  iconBg: "bg-violet-100",  iconText: "text-violet-700",  valueText: "text-violet-700" },
+    rose:    { bg: "bg-rose-50",    border: "border-rose-200",    iconBg: "bg-rose-100",    iconText: "text-rose-700",    valueText: "text-rose-700" },
+    amber:   { bg: "bg-amber-50",   border: "border-amber-200",   iconBg: "bg-amber-100",   iconText: "text-amber-700",   valueText: "text-amber-700" },
+    red:     { bg: "bg-red-50",     border: "border-red-200",     iconBg: "bg-red-100",     iconText: "text-red-700",     valueText: "text-red-700" },
+    stone:   { bg: "bg-white",      border: "border-stone-200",   iconBg: "bg-stone-100",   iconText: "text-stone-600",   valueText: "text-stone-800" },
+  }[accent] || {};
+  return (
+    <div className={`${accentMap.bg} border ${accentMap.border} rounded-lg p-2.5 flex items-center gap-2.5`}>
+      <div className={`w-9 h-9 rounded-lg ${accentMap.iconBg} ${accentMap.iconText} grid place-items-center flex-shrink-0`}>
+        {Icon && <Icon size={15} strokeWidth={1.8} />}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1 justify-between">
+          <div className="text-[10px] tracking-widest uppercase text-stone-500 font-semibold truncate">
+            {label}
+          </div>
+          {info && <InfoIcon tooltip={info} />}
+        </div>
+        <div className={`font-serif text-xl font-bold leading-none mt-0.5 ${accentMap.valueText}`}>
+          {value}
+        </div>
+        {sublabel && (
+          <div className="text-[10px] text-stone-500 mt-0.5 truncate" title={sublabel}>
+            {sublabel}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Botón "i" con tooltip — visible al hover, leíble sin click.
+// Usamos title= como fallback nativo + tooltip CSS-only para experiencia más fluida.
+function InfoIcon({ tooltip = "" }) {
+  return (
+    <span className="group relative inline-flex items-center justify-center flex-shrink-0">
+      <span
+        className="w-4 h-4 rounded-full bg-stone-200 hover:bg-stone-300 text-stone-600 grid place-items-center text-[10px] font-bold leading-none cursor-help transition"
+        title={tooltip}
+      >
+        i
+      </span>
+      <span className="pointer-events-none absolute right-0 top-full mt-1 w-56 p-2.5 rounded-lg bg-stone-900 text-white text-[11px] leading-snug shadow-2xl opacity-0 group-hover:opacity-100 transition-opacity z-50">
+        {tooltip}
+      </span>
+    </span>
+  );
+}
+
 function ComingSoon({ view }) {
   const meta = {
     dashboard: { Icon: LayoutDashboard, title: "Dashboard general", desc: "Panorama de KPIs, ventas del día, citas próximas y alertas operativas." },
     agenda:    { Icon: Calendar,        title: "Agenda integrada",  desc: "Calendario unificado de consultas, citas de grooming y recordatorios." },
-    sales:     { Icon: ShoppingBag,     title: "Ventas y caja",     desc: "Punto de venta, facturación electrónica y arqueo de caja diario." },
+    sales:     { Icon: ShoppingBag,     title: "Ventas y caja",     desc: "Punto de venta, recibos electrónica y arqueo de caja diario." },
     inventory: { Icon: Package,         title: "Inventario",        desc: "Control de stock por producto, lotes, vencimientos y alertas de mínimos." },
-    reports:   { Icon: BarChart3,       title: "Reportes y BI",     desc: "Análisis de facturación, retención de clientes y estacionalidad." },
+    reports:   { Icon: BarChart3,       title: "Reportes y BI",     desc: "Análisis de recibos, retención de clientes y estacionalidad." },
     config:    { Icon: Settings,        title: "Configuración",     desc: "Datos de la tienda, integraciones, copias de seguridad y módulos activos." },
     "client-settings": { Icon: Users,    title: "Ajuste de clientes", desc: "Campos personalizados para tutores, segmentos, etiquetas y reglas de fidelización." },
     "agenda-settings": { Icon: Calendar, title: "Ajuste de agenda",   desc: "Horarios de atención, tipos de cita, recordatorios automáticos y reglas de bloqueo." },
@@ -27756,9 +36622,6 @@ function LoginScreen({ onLogin, error, onBackToLanding }) {
               <CricketLogoIcon size={44} />
               <div>
                 <CricketWordmark color="#ffffff" height={26} />
-                <div className="text-xs tracking-widest text-orange-300 uppercase font-semibold mt-1">
-                  Pet System
-                </div>
               </div>
             </div>
 
@@ -27906,6 +36769,15 @@ export default function CricketLanding() {
   // manualmente desde la agenda antes de ser visibles como confirmadas.
   const [appointmentSettings, setAppointmentSettings] = useState({ autoApprove: true });
 
+  // === Sedes (multi-sucursal) ===
+  // Las elevamos aquí para que la landing pública también pueda mostrar
+  // selector de sede al cliente que agenda desde la web.
+  const [sedes, setSedes] = useState(() => [
+    { id: "sede-pet1", name: "Pet 1", description: "Sucursal principal de Cricket.", active: true, isDefault: true },
+    { id: "sede-pet2", name: "Pet 2", description: "Sucursal de Cricket.", active: true, isDefault: false },
+  ]);
+  const [activeSedeId, setActiveSedeId] = useState("sede-pet1");
+
   const addVisitorMessage = (msg) => {
     setVisitorMessages(prev => [...prev, msg]);
     // En producción: enviar a /api/public-chat/messages
@@ -27920,6 +36792,10 @@ export default function CricketLanding() {
         setExternalAgendaEvents={setGlobalAgendaEvents}
         appointmentSettings={appointmentSettings}
         setAppointmentSettings={setAppointmentSettings}
+        externalSedes={sedes}
+        setExternalSedes={setSedes}
+        externalActiveSedeId={activeSedeId}
+        setExternalActiveSedeId={setActiveSedeId}
       />
     );
   }
@@ -27932,13 +36808,14 @@ export default function CricketLanding() {
       agendaEvents={globalAgendaEvents}
       setAgendaEvents={setGlobalAgendaEvents}
       appointmentSettings={appointmentSettings}
+      sedes={sedes}
     />
   );
 }
 
 // ========== LANDING PÚBLICA ==========
 
-function PublicLanding({ onEnterApp, onVisitorMessage, visitorMessages, agendaEvents = [], setAgendaEvents, appointmentSettings = { autoApprove: true } }) {
+function PublicLanding({ onEnterApp, onVisitorMessage, visitorMessages, agendaEvents = [], setAgendaEvents, appointmentSettings = { autoApprove: true }, sedes = [] }) {
   const [showAppointmentModal, setShowAppointmentModal] = useState(false);
 
   // Landing minimalista: Nav + Hero. La idea es que la web pública tenga UN solo
@@ -27956,6 +36833,7 @@ function PublicLanding({ onEnterApp, onVisitorMessage, visitorMessages, agendaEv
           agendaEvents={agendaEvents}
           setAgendaEvents={setAgendaEvents}
           autoApprove={appointmentSettings.autoApprove}
+          sedes={sedes}
         />
       )}
 
@@ -27977,7 +36855,7 @@ function PublicChatWidget({ onVisitorMessage, visitorMessages }) {
     const welcome = [{
       id: "w-welcome",
       direction: "in",
-      body: "¡Hola! 👋 Soy del equipo de Cricket Pet Care. ¿En qué puedo ayudarte hoy?",
+      body: "¡Hola! 👋 Soy del equipo de Cricket. ¿En qué puedo ayudarte hoy?",
       timestamp: new Date(Date.now() - 60_000).toISOString(),
       author: "Sandra L.",
     }];
@@ -28077,7 +36955,7 @@ function PublicChatWidget({ onVisitorMessage, visitorMessages }) {
               <PawPrint size={18} className="text-emerald-700" />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="font-serif text-base font-semibold leading-tight">Cricket Pet Care</div>
+              <div className="font-serif text-base font-semibold leading-tight">Cricket</div>
               <div className="text-xs flex items-center gap-1.5 mt-0.5 opacity-90">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-300"></span>
                 Sandra · Responde en ~5 min
@@ -28211,9 +37089,6 @@ function Nav({ onEnterApp, onBookAppointment }) {
           <CricketLogoIcon size={40} />
           <div>
             <CricketWordmark color="#646464" height={22} />
-            <div className="text-[9px] tracking-[0.2em] text-orange-700 uppercase font-semibold mt-1">
-              Pet Care
-            </div>
           </div>
         </a>
 
@@ -28661,7 +37536,7 @@ function Footer() {
         </div>
 
         <div className="border-t border-stone-800 mt-10 pt-6 text-xs text-stone-500 flex flex-col sm:flex-row justify-between gap-2">
-          <div>© 2026 Cricket Pet Care. Todos los derechos reservados.</div>
+          <div>© 2026 Cricket. Todos los derechos reservados.</div>
           <div className="flex gap-4">
             <a href="#" className="hover:text-stone-300">Términos</a>
             <a href="#" className="hover:text-stone-300">Privacidad</a>
@@ -28675,15 +37550,21 @@ function Footer() {
 
 // ========== MODAL: AGENDAR CITA ==========
 
-function AppointmentModal({ onClose, agendaEvents = [], setAgendaEvents, autoApprove = true }) {
-  const [step, setStep] = useState(1); // 1: servicio, 2: fecha/hora, 3: datos
+function AppointmentModal({ onClose, agendaEvents = [], setAgendaEvents, autoApprove = true, sedes = [] }) {
+  // Sedes visibles al cliente — solo las activas
+  const visibleSedes = useMemo(() => (sedes || []).filter(s => s.active !== false), [sedes]);
+  // Si solo hay una sede, no preguntamos: arranca directo en "servicio" con esa sede.
+  const needsSedeStep = visibleSedes.length > 1;
+
+  const [step, setStep] = useState(needsSedeStep ? 0 : 1); // 0: sede, 1: servicio, 2: fecha/hora, 3: datos
+  const [selectedSedeId, setSelectedSedeId] = useState(needsSedeStep ? null : (visibleSedes[0]?.id || null));
   const [serviceType, setServiceType] = useState(null); // "vet" | "grooming"
   const [selectedDate, setSelectedDate] = useState(null);
   const [selectedTime, setSelectedTime] = useState(null);
   const [weekOffset, setWeekOffset] = useState(0); // 0 = esta semana, 1 = próxima, etc.
   const [form, setForm] = useState({
     name: "", phone: "", email: "",
-    petName: "", petSpecies: "dog",
+    petName: "", petSpecies: "dog", petSpeciesOther: "",
   });
   const [submitted, setSubmitted] = useState(false);
 
@@ -28762,13 +37643,16 @@ function AppointmentModal({ onClose, agendaEvents = [], setAgendaEvents, autoApp
     { id: "cat", label: "Gato", Icon: Cat },
     { id: "bird", label: "Ave", Icon: Bird },
     { id: "rabbit", label: "Conejo", Icon: Rabbit },
+    { id: "other", label: "Otros", Icon: PawPrint },
   ];
 
   const phoneValid = useMemo(() => form.phone.replace(/\D/g, "").length >= 10, [form.phone]);
   const emailValid = useMemo(() => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email), [form.email]);
-  const formValid = form.name.trim() && phoneValid && emailValid && form.petName.trim();
+  const formValid = form.name.trim() && phoneValid && emailValid && form.petName.trim() &&
+    (form.petSpecies !== "other" || form.petSpeciesOther.trim());
 
   const canAdvance = (s) => {
+    if (s === 0) return !!selectedSedeId;
     if (s === 1) return !!serviceType;
     if (s === 2) return selectedDate && selectedTime;
     if (s === 3) return formValid;
@@ -28793,6 +37677,7 @@ function AppointmentModal({ onClose, agendaEvents = [], setAgendaEvents, autoApp
       pet: form.petName.trim(),
       petCode: null, // mascota nueva, sin código aún
       species: form.petSpecies,
+      speciesOther: form.petSpecies === "other" ? form.petSpeciesOther.trim() : "",
       breed: "",
       owner: form.name.trim(),
       ownerPhone: form.phone.trim(),
@@ -28806,6 +37691,10 @@ function AppointmentModal({ onClose, agendaEvents = [], setAgendaEvents, autoApp
       fromWeb: true,
       pendingApproval: !autoApprove,
       moduleId: serviceType === "vet" ? "vet" : "grooming-ops",
+      // === Sede elegida por el cliente desde la web ===
+      // Esta sede determina qué sucursal recibe la cita. Si la auto-aprobación
+      // está activa, la cita queda visible directamente para el equipo de esa sede.
+      sedeId: selectedSedeId || null,
     };
     setAgendaEvents(prev => [newEvent, ...prev]);
     setSubmitted(true);
@@ -28828,9 +37717,10 @@ function AppointmentModal({ onClose, agendaEvents = [], setAgendaEvents, autoApp
           </div>
           <div className="flex-1 min-w-0">
             <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold">
-              Agendar cita · Paso {step} de 3
+              Agendar cita · Paso {needsSedeStep ? step + 1 : step} de {needsSedeStep ? 4 : 3}
             </div>
             <h3 className="font-serif text-xl font-semibold mt-0.5">
+              {step === 0 && "¿En qué sede?"}
               {step === 1 && "¿Qué servicio necesitas?"}
               {step === 2 && "Elige fecha y hora"}
               {step === 3 && "Tus datos de contacto"}
@@ -28841,11 +37731,12 @@ function AppointmentModal({ onClose, agendaEvents = [], setAgendaEvents, autoApp
           </button>
         </div>
 
-        {/* Stepper visual */}
-        <div className="bg-white border-b border-stone-200 px-5 py-3 flex items-center gap-2">
-          {[1, 2, 3].map((n, i) => {
+        {/* Stepper visual: si hay multi-sede empieza en 0 (Sede), sino arranca en 1. */}
+        <div className="bg-white border-b border-stone-200 px-5 py-3 flex items-center gap-2 overflow-x-auto">
+          {(needsSedeStep ? [0, 1, 2, 3] : [1, 2, 3]).map((n, i, arr) => {
             const isActive = step === n;
             const isDone = step > n;
+            const label = n === 0 ? "Sede" : n === 1 ? "Servicio" : n === 2 ? "Fecha y hora" : "Datos";
             return (
               <Fragment key={n}>
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -28854,13 +37745,13 @@ function AppointmentModal({ onClose, agendaEvents = [], setAgendaEvents, autoApp
                     isDone ? "bg-emerald-500 text-white" :
                     "bg-stone-200 text-stone-600"
                   }`}>
-                    {isDone ? <Check size={11} strokeWidth={3} /> : n}
+                    {isDone ? <Check size={11} strokeWidth={3} /> : (i + 1)}
                   </span>
                   <span className={`text-xs font-semibold ${isActive ? "text-stone-900" : "text-stone-500"}`}>
-                    {n === 1 ? "Servicio" : n === 2 ? "Fecha y hora" : "Datos"}
+                    {label}
                   </span>
                 </div>
-                {i < 2 && <div className="flex-1 h-0.5 bg-stone-200"></div>}
+                {i < arr.length - 1 && <div className="flex-1 h-0.5 bg-stone-200 min-w-[10px]"></div>}
               </Fragment>
             );
           })}
@@ -28868,6 +37759,44 @@ function AppointmentModal({ onClose, agendaEvents = [], setAgendaEvents, autoApp
 
         {/* Body */}
         <div className="p-5 max-h-96 overflow-y-auto">
+          {/* Step 0: sede (solo si hay multi-sede) */}
+          {step === 0 && (
+            <div className="space-y-3">
+              <p className="text-sm text-stone-600 mb-3">
+                Selecciona la sede a la que deseas ir.
+              </p>
+              {visibleSedes.map(sede => (
+                <button
+                  key={sede.id}
+                  onClick={() => setSelectedSedeId(sede.id)}
+                  className={`w-full text-left p-5 rounded-2xl border-2 transition flex items-start gap-4 ${
+                    selectedSedeId === sede.id
+                      ? "border-orange-500 bg-orange-50"
+                      : "border-stone-200 bg-white hover:border-orange-300"
+                  }`}
+                >
+                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-500 to-orange-700 text-white grid place-items-center flex-shrink-0 shadow-lg">
+                    <MapPin size={26} strokeWidth={1.6} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-serif text-lg font-semibold">{sede.name}</span>
+                      {sede.isDefault && (
+                        <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-orange-100 text-orange-700">
+                          Principal
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-sm text-stone-600 leading-relaxed mt-0.5">
+                      {sede.description || "Sucursal de Cricket."}
+                    </div>
+                  </div>
+                  {selectedSedeId === sede.id && <Check size={20} className="text-orange-600 flex-shrink-0 mt-2" strokeWidth={2.5} />}
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Step 1: servicio */}
           {step === 1 && (
             <div className="space-y-3">
@@ -29138,6 +38067,15 @@ function AppointmentModal({ onClose, agendaEvents = [], setAgendaEvents, autoApp
                       );
                     })}
                   </div>
+                  {form.petSpecies === "other" && (
+                    <input
+                      value={form.petSpeciesOther}
+                      onChange={(e) => setForm({...form, petSpeciesOther: e.target.value})}
+                      placeholder="¿Qué tipo de mascota? (ej: hurón, iguana, tortuga…)"
+                      autoFocus
+                      className="mt-2 w-full px-3.5 py-2.5 bg-white border border-orange-300 rounded-xl text-sm outline-none focus:border-orange-500"
+                    />
+                  )}
                 </FormField>
               </div>
 
@@ -29153,7 +38091,8 @@ function AppointmentModal({ onClose, agendaEvents = [], setAgendaEvents, autoApp
 
         {/* Footer */}
         <div className="p-3.5 px-5 border-t border-stone-200 bg-white flex justify-between gap-2 flex-wrap">
-          {step > 1 ? (
+          {/* Atrás: aparece si hay paso anterior. Si multi-sede, el step 0 es alcanzable. */}
+          {step > (needsSedeStep ? 0 : 1) ? (
             <button
               onClick={() => setStep(step - 1)}
               className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold bg-white text-stone-700 border border-stone-200 hover:border-orange-400"
@@ -29865,7 +38804,7 @@ function VetCatalogView({ services, setServices, vetSupplies, setVetSupplies, us
                 </div>
               </div>
               <div className="p-5 text-sm text-stone-700 leading-relaxed space-y-3">
-                <p>Esto removerá <strong>"{svc.name}"</strong> del catálogo. El historial de consultas y facturas que lo mencionan no se modifica.</p>
+                <p>Esto removerá <strong>"{svc.name}"</strong> del catálogo. El historial de consultas y recibos que lo mencionan no se modifica.</p>
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-xs text-amber-900 flex items-start gap-2">
                   <Info size={11} className="text-amber-700 flex-shrink-0 mt-0.5" />
                   <span>Si solo quieres dejar de ofrecerlo pero conservar el historial, usa <strong>Desactivar</strong>.</span>
@@ -29959,6 +38898,7 @@ function PassportUpdatesView({ passports, setPassports, petUpdates, setPetUpdate
     { id: "rabbit", label: "Conejo", Icon: Rabbit },
     { id: "rodent", label: "Roedor", Icon: Rat },
     { id: "fish", label: "Pez", Icon: Fish },
+    { id: "other", label: "Otros", Icon: PawPrint },
   ];
 
   const handleSearch = () => {
@@ -30680,7 +39620,15 @@ function PassportUpdatesView({ passports, setPassports, petUpdates, setPetUpdate
 // Cada columna agrupa pacientes según su estado clínico actual.
 // Es el "tablero principal" de la veterinaria — el equivalente a Trello/kanban
 // para gestionar a los pacientes activos.
-function VetPatientsKanban({ patients, activePatientId, onSelectPatient, onRequestWalkInPassport, onMoveStatus, vetEvents = [] }) {
+function VetPatientsKanban({ patients, activePatientId, onSelectPatient, onRequestWalkInPassport, onMoveStatus, vetEvents = [], activeModule = null }) {
+  // ¿El módulo permite drag&drop entre columnas? Defaults a true.
+  const dragEnabled = activeModule?.features?.dragAndDrop !== false;
+  // Configuración de qué campos se muestran en cada card. Default: todo visible.
+  const cardFields = {
+    petName: true, petCode: true, breed: true, age: true,
+    tutorName: true, time: true, invoiceNumber: true, statusBadge: true,
+    ...(activeModule?.cardFields || {}),
+  };
   // Reloj actual: tick cada minuto para detectar citas que se retrasan
   // Si la hora de la cita ya pasó y el paciente sigue en "Reserva hoy",
   // mostramos un reloj indicando "llega tarde" y el tiempo de retraso.
@@ -30696,6 +39644,7 @@ function VetPatientsKanban({ patients, activePatientId, onSelectPatient, onReque
   const [dragOverColumnId, setDragOverColumnId] = useState(null);
   const dragDataRef = useRef(null);
   const handleDragStart = (e, patientId, fromStatus) => {
+    if (!dragEnabled) { e.preventDefault?.(); return; }
     if (!patientId || !fromStatus) return;
     dragDataRef.current = { patientId, fromStatus };
     // dataTransfer es necesario en algunos browsers para que el drag inicie
@@ -30727,13 +39676,35 @@ function VetPatientsKanban({ patients, activePatientId, onSelectPatient, onReque
   // Agrupación por status, con orden definido y colores semánticos
   // Flujo natural del día: reserva → consulta → (tratamiento en sede) → finalizado
   // Control y Vacuna están agrupados en una sola columna con calendario propio.
-  const COLUMN_DEFS = [
-    { id: "reserva",         label: "Reserva hoy",       color: "stone",   description: "Citas agendadas para hoy" },
-    { id: "consulta",        label: "En consulta",       color: "blue",    description: "Atención activa con el veterinario" },
-    { id: "tratamiento_sede", label: "Tratamiento en sede", color: "amber",  description: "Hospitalizado · agregando insumos a factura" },
-    { id: "control",         label: "Control / Vacunación", color: "orange", description: "Seguimiento programado · calendario propio" },
-    { id: "finalizado",      label: "Finalizado",         color: "stone",   description: "Atención cerrada y facturada" },
-  ];
+  // Los IDs internos son fijos (el status del paciente los referencia) pero las
+  // ETIQUETAS visibles pueden venir del módulo configurado (ej: una clínica que
+  // prefiere llamar "Reserva hoy" como "Citas del día").
+  const COLUMN_DEFS = useMemo(() => {
+    // Mapeo de IDs del módulo (vienen del wizard) → IDs internos del kanban
+    const MODULE_TO_INTERNAL = {
+      "reserva-hoy":   "reserva",
+      "en-consulta":   "consulta",
+      "tratamiento":   "tratamiento_sede",
+      "control":       "control",
+      "finalizado":    "finalizado",
+    };
+    const defaults = [
+      { id: "reserva",         label: "Reserva hoy",       color: "stone",   description: "Citas agendadas para hoy" },
+      { id: "consulta",        label: "En consulta",       color: "blue",    description: "Atención activa con el veterinario" },
+      { id: "tratamiento_sede", label: "Tratamiento en sede", color: "amber",  description: "Hospitalizado · agregando insumos a recibo" },
+      { id: "control",         label: "Control / Vacunación", color: "orange", description: "Seguimiento programado · calendario propio" },
+      { id: "finalizado",      label: "Finalizado",         color: "stone",   description: "Atención cerrada y reciboda" },
+    ];
+    // Si el módulo trae columnas custom, sobrescribimos labels manteniendo el orden
+    // y el id interno (necesario para que el drag & drop siga funcionando).
+    const moduleCols = activeModule?.columns;
+    if (!moduleCols || moduleCols.length === 0) return defaults;
+    return defaults.map(def => {
+      // Buscar columna del módulo cuyo id se mapea a este id interno
+      const match = moduleCols.find(c => MODULE_TO_INTERNAL[c.id] === def.id);
+      return match ? { ...def, label: match.label || def.label } : def;
+    });
+  }, [activeModule]);
 
   const columnColors = {
     stone:   { dot: "bg-stone-500",   border: "border-stone-200",   bg: "bg-stone-50",   headerBg: "bg-stone-100",   text: "text-stone-700" },
@@ -30760,6 +39731,7 @@ function VetPatientsKanban({ patients, activePatientId, onSelectPatient, onReque
         eventId: ev.id,
         time: ev.time,
         title: ev.title,
+        reason: ev.reason || ev.notes || null,
         // Si hay match, usar datos del paciente; si no, datos del evento
         id: patient?.id ?? `walkin-${ev.id}`,
         code: patient?.code ?? ev.petCode,
@@ -30863,8 +39835,8 @@ function VetPatientsKanban({ patients, activePatientId, onSelectPatient, onReque
                       return (
                         <button
                           key={p.eventId || p.id}
-                          draggable={p.isPatientRegistered}
-                          onDragStart={(e) => p.isPatientRegistered && handleDragStart(e, p.id, "reserva")}
+                          draggable={dragEnabled && p.isPatientRegistered}
+                          onDragStart={(e) => dragEnabled && p.isPatientRegistered && handleDragStart(e, p.id, "reserva")}
                           onDragEnd={handleDragEnd}
                           onClick={() => {
                             if (!p.isPatientRegistered) {
@@ -30873,6 +39845,7 @@ function VetPatientsKanban({ patients, activePatientId, onSelectPatient, onReque
                                 eventId: p.eventId,
                                 time: p.time,
                                 title: p.title,
+                                reason: p.reason || null,
                                 prefilled: {
                                   name: p.name && p.name !== "Sin asignar" ? p.name : "",
                                   species: p.species,
@@ -30898,6 +39871,7 @@ function VetPatientsKanban({ patients, activePatientId, onSelectPatient, onReque
                           }`}
                         >
                           {/* Hora destacada arriba con badge de tardanza si aplica */}
+                          {cardFields.time && (
                           <div className="flex items-center gap-1.5 mb-1">
                             <Clock size={10} className={isLate ? "text-red-600 animate-pulse flex-shrink-0" : "text-stone-500 flex-shrink-0"} />
                             <span className={`font-mono text-xs font-bold ${isLate ? "text-red-700" : "text-stone-800"}`}>{p.time}</span>
@@ -30910,12 +39884,13 @@ function VetPatientsKanban({ patients, activePatientId, onSelectPatient, onReque
                               <span className="text-xs text-stone-400 truncate">· {p.title}</span>
                             )}
                           </div>
+                          )}
                           <div className="flex items-start gap-2">
                             <PetAvatar species={p.species} small />
                             <div className="flex-1 min-w-0">
                               <div className="flex items-baseline gap-1">
-                                <span className="font-semibold text-xs truncate">{p.name}</span>
-                                {p.code && p.code !== "—" && (
+                                {cardFields.petName && <span className="font-semibold text-xs truncate">{p.name}</span>}
+                                {cardFields.petCode && p.code && p.code !== "—" && (
                                   <span className="font-mono text-xs text-orange-700 font-bold">#{p.code}</span>
                                 )}
                               </div>
@@ -30925,14 +39900,20 @@ function VetPatientsKanban({ patients, activePatientId, onSelectPatient, onReque
                                   {p.title}
                                 </div>
                               )}
-                              {p.breed && p.breed !== "—" && (
+                              {cardFields.breed && p.breed && p.breed !== "—" && (
                                 <div className="text-xs text-stone-500 truncate">
-                                  {p.breed}{p.age ? ` · ${p.age}` : ""}
+                                  {p.breed}{cardFields.age && p.age ? ` · ${p.age}` : ""}
                                 </div>
                               )}
-                              {p.owner && (
+                              {cardFields.tutorName && p.owner && (
                                 <div className="text-xs text-stone-400 truncate">
                                   Tutor: {p.owner}
+                                </div>
+                              )}
+                              {p.reason && (
+                                <div className="text-xs text-blue-600 mt-0.5 truncate flex items-center gap-1">
+                                  <Info size={9} className="flex-shrink-0" />
+                                  {p.reason}
                                 </div>
                               )}
                               {!p.isPatientRegistered && (
@@ -30951,25 +39932,29 @@ function VetPatientsKanban({ patients, activePatientId, onSelectPatient, onReque
                       return (
                         <button
                           key={p.id}
-                          draggable
-                          onDragStart={(e) => handleDragStart(e, p.id, col.id)}
+                          draggable={dragEnabled}
+                          onDragStart={(e) => dragEnabled && handleDragStart(e, p.id, col.id)}
                           onDragEnd={handleDragEnd}
                           onClick={() => onSelectPatient && onSelectPatient(p.id)}
-                          className={`w-full flex items-start gap-2 p-2 rounded-lg border bg-white text-left transition cursor-grab active:cursor-grabbing ${
+                          className={`w-full flex items-start gap-2 p-2 rounded-lg border bg-white text-left transition ${
+                            dragEnabled ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
+                          } ${
                             active ? "border-orange-500 ring-1 ring-orange-300 shadow" : "border-stone-200 hover:border-orange-300 hover:shadow-sm"
                           }`}
                         >
                           <PetAvatar species={p.species} small />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-baseline gap-1">
-                              <span className="font-semibold text-xs truncate">{p.name}</span>
-                              {p.code && (
+                              {cardFields.petName && <span className="font-semibold text-xs truncate">{p.name}</span>}
+                              {cardFields.petCode && p.code && (
                                 <span className="font-mono text-xs text-orange-700 font-bold">#{p.code}</span>
                               )}
                             </div>
+                            {(cardFields.breed || cardFields.age) && (
                             <div className="text-xs text-stone-500 truncate">
-                              {p.breed} · {p.age}
+                              {cardFields.breed && p.breed}{cardFields.breed && cardFields.age && p.age ? " · " : ""}{cardFields.age && p.age}
                             </div>
+                            )}
                             <div className="text-xs text-stone-400 mt-1 italic truncate">
                               {p.lastVisit}
                             </div>
@@ -31517,10 +40502,222 @@ function VetSupplyPickerModal({ supplies, onClose, onAdd }) {
 // ========== FICHA CLÍNICA: card que adapta acciones según etapa ==========
 // El drawer cambia de funciones según el estado del paciente:
 //   reserva          → ficha mínima + "Entrar en consulta"
-//   consulta         → insumos + "Confirmar consulta" (crea factura, mueve a tratamiento_sede o finalizado)
-//   tratamiento_sede → seguir agregando insumos a la factura abierta + "Cerrar atención"
+//   consulta         → insumos + "Confirmar consulta" (crea recibo, mueve a tratamiento_sede o finalizado)
+//   tratamiento_sede → seguir agregando insumos a la recibo abierta + "Cerrar atención"
 //   control          → calendario propio (controles, vacunas, revisiones)
-//   finalizado       → resumen, factura visible, opción de reabrir
+//   finalizado       → resumen, recibo visible, opción de reabrir
+// ========== PET EDITABLE SECTION (drawer del CRM Veterinaria) ==========
+// Sección "Mascota" del drawer con botón "Editar" inline. Permite modificar
+// los datos básicos del pasaporte (nombre, especie, raza, edad, sexo, peso,
+// color, microchip) sin tener que abrir la ficha completa.
+function PetEditableSection({ patient, passport, onUpdatePassport }) {
+  const [editing, setEditing] = useState(false);
+  const initial = {
+    name: passport?.name || patient.name || "",
+    species: passport?.species || patient.species || "dog",
+    breed: passport?.breed || patient.breed || "",
+    age: passport?.age || patient.age || "",
+    gender: passport?.gender || patient.gender || "M",
+    weight: passport?.weight || "",
+    color: passport?.color || "",
+    microchip: passport?.microchip || "",
+  };
+  const [draft, setDraft] = useState(initial);
+
+  const handleStart = () => {
+    setDraft(initial);
+    setEditing(true);
+  };
+  const handleCancel = () => {
+    setDraft(initial);
+    setEditing(false);
+  };
+  const handleSave = () => {
+    if (onUpdatePassport) onUpdatePassport(draft);
+    setEditing(false);
+  };
+
+  const SPECIES_LABEL = {
+    dog: "Perro", cat: "Gato", bird: "Ave", rabbit: "Conejo",
+    fish: "Pez", rodent: "Roedor", other: "Otros",
+  };
+  const speciesDisplay = SPECIES_LABEL[draft.species] || draft.species;
+
+  if (editing) {
+    return (
+      <div className="p-3 bg-stone-50">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold">
+            Mascota · Editando
+          </div>
+          <div className="flex gap-1.5">
+            <button
+              onClick={handleCancel}
+              className="px-2 py-1 rounded-md text-[10px] font-semibold bg-white border border-stone-200 hover:border-stone-400 text-stone-700 transition"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleSave}
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-orange-600 hover:bg-orange-700 text-white transition"
+            >
+              <Check size={10} /> Guardar
+            </button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          <div>
+            <label className="text-stone-400 block leading-none mb-0.5">Nombre</label>
+            <input
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+              className="w-full px-2 py-1 bg-white border border-stone-200 rounded text-xs outline-none focus:border-orange-400"
+            />
+          </div>
+          <div>
+            <label className="text-stone-400 block leading-none mb-0.5">Especie</label>
+            <select
+              value={draft.species}
+              onChange={(e) => setDraft({ ...draft, species: e.target.value })}
+              className="w-full px-2 py-1 bg-white border border-stone-200 rounded text-xs outline-none focus:border-orange-400"
+            >
+              <option value="dog">Perro</option>
+              <option value="cat">Gato</option>
+              <option value="bird">Ave</option>
+              <option value="rabbit">Conejo</option>
+              <option value="fish">Pez</option>
+              <option value="rodent">Roedor</option>
+              <option value="other">Otros</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-stone-400 block leading-none mb-0.5">Raza</label>
+            <input
+              value={draft.breed}
+              onChange={(e) => setDraft({ ...draft, breed: e.target.value })}
+              placeholder="Ej: Labrador"
+              className="w-full px-2 py-1 bg-white border border-stone-200 rounded text-xs outline-none focus:border-orange-400 placeholder:text-stone-400"
+            />
+          </div>
+          <div>
+            <label className="text-stone-400 block leading-none mb-0.5">Edad</label>
+            <input
+              value={draft.age}
+              onChange={(e) => setDraft({ ...draft, age: e.target.value })}
+              placeholder="Ej: 3 años"
+              className="w-full px-2 py-1 bg-white border border-stone-200 rounded text-xs outline-none focus:border-orange-400 placeholder:text-stone-400"
+            />
+          </div>
+          <div>
+            <label className="text-stone-400 block leading-none mb-0.5">Sexo</label>
+            <select
+              value={draft.gender}
+              onChange={(e) => setDraft({ ...draft, gender: e.target.value })}
+              className="w-full px-2 py-1 bg-white border border-stone-200 rounded text-xs outline-none focus:border-orange-400"
+            >
+              <option value="M">♂ Macho</option>
+              <option value="F">♀ Hembra</option>
+              <option value="U">Desconocido</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-stone-400 block leading-none mb-0.5">Peso</label>
+            <input
+              value={draft.weight}
+              onChange={(e) => setDraft({ ...draft, weight: e.target.value })}
+              placeholder="Ej: 15 kg"
+              className="w-full px-2 py-1 bg-white border border-stone-200 rounded text-xs outline-none focus:border-orange-400 placeholder:text-stone-400"
+            />
+          </div>
+          <div>
+            <label className="text-stone-400 block leading-none mb-0.5">Color</label>
+            <input
+              value={draft.color}
+              onChange={(e) => setDraft({ ...draft, color: e.target.value })}
+              placeholder="Capa o color"
+              className="w-full px-2 py-1 bg-white border border-stone-200 rounded text-xs outline-none focus:border-orange-400 placeholder:text-stone-400"
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="text-stone-400 block leading-none mb-0.5">Microchip</label>
+            <input
+              value={draft.microchip}
+              onChange={(e) => setDraft({ ...draft, microchip: e.target.value })}
+              placeholder="Número de microchip"
+              className="w-full px-2 py-1 bg-white border border-stone-200 rounded text-xs outline-none focus:border-orange-400 placeholder:text-stone-400 font-mono"
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-3 bg-stone-50">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold">
+          Mascota
+        </div>
+        {onUpdatePassport && (
+          <button
+            onClick={handleStart}
+            title="Editar datos de la mascota"
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-semibold bg-white border border-stone-200 hover:border-orange-400 hover:text-orange-700 text-stone-600 transition"
+          >
+            <Edit3 size={10} /> Editar
+          </button>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
+        <div>
+          <span className="text-stone-400 block leading-none">Nombre</span>
+          <span className="font-semibold text-stone-800">{patient.name}</span>
+        </div>
+        <div>
+          <span className="text-stone-400 block leading-none">Especie · Raza</span>
+          <span className="font-semibold text-stone-800">
+            {speciesDisplay}
+            {patient.breed && ` · ${patient.breed}`}
+          </span>
+        </div>
+        {patient.age && (
+          <div>
+            <span className="text-stone-400 block leading-none">Edad</span>
+            <span className="font-semibold text-stone-800">{patient.age}</span>
+          </div>
+        )}
+        {(passport?.gender || patient.gender) && (
+          <div>
+            <span className="text-stone-400 block leading-none">Sexo</span>
+            <span className="font-semibold text-stone-800">
+              {((passport?.gender || patient.gender) === "M" || (passport?.gender || patient.gender) === "macho") ? "♂ Macho" :
+               ((passport?.gender || patient.gender) === "F" || (passport?.gender || patient.gender) === "hembra") ? "♀ Hembra" : "—"}
+            </span>
+          </div>
+        )}
+        {passport?.weight && (
+          <div>
+            <span className="text-stone-400 block leading-none">Peso</span>
+            <span className="font-semibold text-stone-800">{passport.weight}</span>
+          </div>
+        )}
+        {passport?.color && (
+          <div>
+            <span className="text-stone-400 block leading-none">Color</span>
+            <span className="font-semibold text-stone-800">{passport.color}</span>
+          </div>
+        )}
+        {passport?.microchip && (
+          <div className="col-span-2">
+            <span className="text-stone-400 block leading-none">Microchip</span>
+            <span className="font-mono text-stone-800">{passport.microchip}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function VetPatientCard({
   patient,
   forceReservationView = false,
@@ -31542,6 +40739,7 @@ function VetPatientCard({
   onCloseInvoice,
   onGoToSales,
   invoice,
+  invoices = [],
   passport = null,
   clients = [],
   canMessage = false,
@@ -31549,6 +40747,7 @@ function VetPatientCard({
   onSendMessage,
   userRole = "vet",
   permissions = {},
+  onUpdatePassport,
 }) {
   const [showSupplyPicker, setShowSupplyPicker] = useState(false);
   const [showConfirmConsult, setShowConfirmConsult] = useState(false);
@@ -31568,7 +40767,7 @@ function VetPatientCard({
   };
   const showField = (sectionId, fieldId) => fieldLevel(sectionId, fieldId) !== "hidden";
 
-  // Si abrimos desde Reserva, forzamos UI de reserva (botón "Entrar en consulta", sin factura).
+  // Si abrimos desde Reserva, forzamos UI de reserva (botón "Entrar en consulta", sin recibo).
   // Esto cubre el caso donde el paciente tiene status legacy 'consulta' en VET_PATIENTS pero
   // su cita del día sigue pendiente — el vet aún no lo ha marcado como llegado.
   const status = forceReservationView ? "reserva" : (patient.status || "consulta");
@@ -31594,7 +40793,7 @@ function VetPatientCard({
     ? tutorClient.name.split(" ").slice(0, 2).map(s => s[0]).join("").toUpperCase()
     : (patient.owner || "??").split(" ").slice(0, 2).map(s => s[0]).join("").toUpperCase();
 
-  // Cuando se actualizan insumos, también re-sincronizar la factura activa
+  // Cuando se actualizan insumos, también re-sincronizar la recibo activa
   const updateSuppliesAndInvoice = (newSupplies) => {
     onUpdateSupplies(newSupplies);
     if (activeInvoiceId && onUpsertInvoice) {
@@ -31603,15 +40802,15 @@ function VetPatientCard({
   };
 
   // Confirmar consulta:
-  //  - Si NO hay tratamiento adicional → crear/finalizar factura, mover a "finalizado"
-  //  - Si hay tratamiento → mantener factura abierta, mover a "tratamiento_sede"
+  //  - Si NO hay tratamiento adicional → crear/finalizar recibo, mover a "finalizado"
+  //  - Si hay tratamiento → mantener recibo abierta, mover a "tratamiento_sede"
   // En ambos casos, las notas clínicas escritas durante la consulta se persisten
   // en el historial del pasaporte (clinicHistory).
   const handleConfirmConsultation = (needsTreatment) => {
     onUpsertInvoice && onUpsertInvoice(supplies, { includeConsultation: true });
     setShowConfirmConsult(false);
     if (needsTreatment) {
-      // El paciente queda hospitalizado/en tratamiento. Factura sigue abierta para añadir más.
+      // El paciente queda hospitalizado/en tratamiento. Recibo sigue abierta para añadir más.
       // Las notas se persistirán cuando se cierre la atención total.
       onAdvance("tratamiento_sede", { startedAt: new Date().toISOString() });
     } else {
@@ -31678,6 +40877,39 @@ function VetPatientCard({
   // === Estado del chat (cuando hay tutor identificado) ===
   const [chatDraft, setChatDraft] = useState("");
   const [chatChannel, setChatChannel] = useState("whatsapp");
+  // Ancho del panel de chat (columna izquierda). Es ajustable arrastrando el
+  // divisor entre el chat y la ficha clínica. Se mantiene dentro de un rango
+  // razonable para que ninguno de los dos paneles quede inutilizable.
+  const CHAT_MIN_W = 280;
+  const CHAT_MAX_W = 720;
+  const [chatPanelW, setChatPanelW] = useState(380);
+  // Menú "+" del composer del chat (adjuntar foto / recibo) y sus modales.
+  const [showChatAttachMenu, setShowChatAttachMenu] = useState(false);
+  const [showChatImagePicker, setShowChatImagePicker] = useState(false);
+  const [showChatInvoicePicker, setShowChatInvoicePicker] = useState(false);
+
+  // Drag del divisor: ajusta chatPanelW siguiendo el cursor. Se calcula contra
+  // el borde izquierdo del cuerpo (el contenedor de las 2 columnas).
+  const onDividerDragStart = (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = chatPanelW;
+    const handleMove = (ev) => {
+      const next = startW + (ev.clientX - startX);
+      setChatPanelW(Math.max(CHAT_MIN_W, Math.min(CHAT_MAX_W, next)));
+    };
+    const handleUp = () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+  };
+
   const channelMessages = useMemo(
     () => (conversation || []).filter(m => m.channel === chatChannel),
     [conversation, chatChannel]
@@ -31687,10 +40919,42 @@ function VetPatientCard({
     (conversation || []).forEach(msg => { m[msg.channel] = (m[msg.channel] || 0) + 1; });
     return m;
   }, [conversation]);
+  // Permiso de enviar recibo por chat — específico del CRM Veterinaria.
+  // A diferencia de "messaging" (transversal vía Clientes), este se resuelve
+  // contra el CRM "vet": cada CRM controla su propio envío de recibos.
+  const canSendInvoice = showField("billing", "send-invoice");
+
   const handleChatSend = () => {
     if (!chatDraft.trim() || !tutorClient || !onSendMessage) return;
     onSendMessage(tutorClient.id, chatChannel, chatDraft.trim());
     setChatDraft("");
+  };
+  // Enviar adjunto desde el chat de la ficha: imagen o recibo. Reutiliza la
+  // misma firma extendida de onSendMessage que el módulo de Mensajes
+  // (4º argumento { attachment: ... }).
+  const handleChatSendImage = (imageDataUrl, caption = "") => {
+    if (!tutorClient || !onSendMessage) return;
+    const body = caption || "📎 Imagen adjunta";
+    onSendMessage(tutorClient.id, chatChannel, body, {
+      attachment: { type: "image", url: imageDataUrl, caption },
+    });
+    setShowChatImagePicker(false);
+    setShowChatAttachMenu(false);
+  };
+  const handleChatSendInvoice = (inv, messageText = null) => {
+    if (!tutorClient || !onSendMessage) return;
+    // Defensa en profundidad: aunque la opción esté oculta sin permiso, no
+    // enviamos la recibo si el rol no tiene "send-invoice" en el CRM vet.
+    if (!canSendInvoice) return;
+    if (messageText) {
+      onSendMessage(tutorClient.id, chatChannel, messageText);
+    }
+    const body = `📄 Recibo ${inv.number} · $${(inv.total ?? 0).toFixed(2)}`;
+    onSendMessage(tutorClient.id, chatChannel, body, {
+      attachment: { type: "invoice", invoiceId: inv.id },
+    });
+    setShowChatInvoicePicker(false);
+    setShowChatAttachMenu(false);
   };
   const handleChatKeyDown = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -31794,9 +41058,9 @@ function VetPatientCard({
             <div
               className={isMobile
                 ? "flex-1 flex flex-col bg-white overflow-hidden"
-                : "flex flex-col bg-white border-r border-stone-200 flex-shrink-0"
+                : "flex flex-col bg-white flex-shrink-0"
               }
-              style={isMobile ? undefined : { width: 380 }}
+              style={isMobile ? undefined : { width: chatPanelW }}
             >
               {/* Header del tutor */}
               <div className="p-3 border-b border-stone-200 bg-gradient-to-r from-white to-orange-50 flex items-center gap-2 flex-shrink-0">
@@ -31884,6 +41148,66 @@ function VetPatientCard({
 
               {/* Composer */}
               <div className="p-2 border-t border-stone-200 bg-white flex-shrink-0 flex items-end gap-2">
+                {/* Botón "+" para adjuntar foto o recibo (mismo patrón que el
+                    módulo de Mensajes). Solo activo si el rol puede enviar. */}
+                <div className="relative flex-shrink-0">
+                  <button
+                    onClick={() => setShowChatAttachMenu(v => !v)}
+                    disabled={!canMessage}
+                    title="Adjuntar"
+                    className={`w-9 h-9 rounded-xl grid place-items-center transition ${
+                      !canMessage
+                        ? "bg-stone-100 text-stone-300 cursor-not-allowed"
+                        : showChatAttachMenu
+                          ? "bg-orange-500 text-white rotate-45"
+                          : "bg-stone-100 hover:bg-stone-200 text-stone-600"
+                    }`}
+                  >
+                    <Plus size={14} />
+                  </button>
+                  {showChatAttachMenu && canMessage && (
+                    <>
+                      <div onClick={() => setShowChatAttachMenu(false)} className="fixed inset-0 z-30"></div>
+                      <div className="absolute left-0 bottom-full mb-2 w-56 bg-white border border-stone-200 rounded-xl shadow-2xl z-40 overflow-hidden">
+                        <button
+                          onClick={() => { setShowChatAttachMenu(false); setShowChatImagePicker(true); }}
+                          className={`w-full flex items-start gap-2.5 p-3 hover:bg-orange-50 transition text-left ${
+                            canSendInvoice ? "border-b border-stone-100" : ""
+                          }`}
+                        >
+                          <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 grid place-items-center flex-shrink-0">
+                            <Camera size={13} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-sm">Foto</div>
+                            <div className="text-xs text-stone-500 leading-snug">
+                              Sube una imagen desde tu equipo.
+                            </div>
+                          </div>
+                        </button>
+                        {/* "Recibo" solo si el rol tiene el permiso de enviar
+                            recibo por chat en el CRM Veterinaria. Si no, el menú
+                            solo ofrece Foto. */}
+                        {canSendInvoice && (
+                          <button
+                            onClick={() => { setShowChatAttachMenu(false); setShowChatInvoicePicker(true); }}
+                            className="w-full flex items-start gap-2.5 p-3 hover:bg-orange-50 transition text-left"
+                          >
+                            <div className="w-8 h-8 rounded-lg bg-orange-100 text-orange-700 grid place-items-center flex-shrink-0">
+                              <Receipt size={13} />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-sm">Recibo</div>
+                              <div className="text-xs text-stone-500 leading-snug">
+                                Comparte cualquier recibo existente.
+                              </div>
+                            </div>
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
                 <textarea
                   value={chatDraft}
                   onChange={(e) => setChatDraft(e.target.value)}
@@ -31906,6 +41230,28 @@ function VetPatientCard({
                 >
                   <Send size={13} strokeWidth={2.2} />
                 </button>
+              </div>
+            </div>
+          )}
+
+          {/* === Divisor arrastrable entre chat y ficha (solo desktop) ===
+              Permite ampliar el chat o la ficha según haga falta. Se muestra
+              únicamente cuando el panel de chat está visible. */}
+          {!isMobile && tutorClient && onSendMessage && showField("messaging", "chat-read") && (
+            <div
+              onMouseDown={onDividerDragStart}
+              onDoubleClick={() => setChatPanelW(380)}
+              title="Arrastra para ajustar · doble clic para restablecer"
+              className="group relative w-1.5 flex-shrink-0 cursor-col-resize bg-stone-200 hover:bg-orange-400 transition-colors"
+            >
+              {/* Zona de agarre más ancha que la línea visible, para que sea
+                  fácil de tomar sin que ocupe espacio visual. */}
+              <div className="absolute inset-y-0 -left-1.5 -right-1.5"></div>
+              {/* Indicador visual de "grip" centrado */}
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col gap-0.5 opacity-40 group-hover:opacity-100 transition-opacity">
+                <span className="w-0.5 h-0.5 rounded-full bg-stone-600 group-hover:bg-white"></span>
+                <span className="w-0.5 h-0.5 rounded-full bg-stone-600 group-hover:bg-white"></span>
+                <span className="w-0.5 h-0.5 rounded-full bg-stone-600 group-hover:bg-white"></span>
               </div>
             </div>
           )}
@@ -32031,56 +41377,11 @@ function VetPatientCard({
             </div>
 
             {/* Mascota */}
-            <div className="p-3 bg-stone-50">
-              <div className="text-xs tracking-widest uppercase text-stone-500 font-semibold mb-2">
-                Mascota
-              </div>
-              <div className="grid grid-cols-2 gap-y-1.5 gap-x-3 text-xs">
-                <div>
-                  <span className="text-stone-400 block leading-none">Nombre</span>
-                  <span className="font-semibold text-stone-800">{patient.name}</span>
-                </div>
-                <div>
-                  <span className="text-stone-400 block leading-none">Especie · Raza</span>
-                  <span className="font-semibold text-stone-800">
-                    {(patient.species === "dog" ? "Perro" : patient.species === "cat" ? "Gato" : patient.species === "bird" ? "Ave" : patient.species === "rabbit" ? "Conejo" : patient.species === "fish" ? "Pez" : "Roedor")}
-                    {patient.breed && ` · ${patient.breed}`}
-                  </span>
-                </div>
-                {patient.age && (
-                  <div>
-                    <span className="text-stone-400 block leading-none">Edad</span>
-                    <span className="font-semibold text-stone-800">{patient.age}</span>
-                  </div>
-                )}
-                {(passport?.gender || patient.gender) && (
-                  <div>
-                    <span className="text-stone-400 block leading-none">Sexo</span>
-                    <span className="font-semibold text-stone-800">
-                      {(passport?.gender || patient.gender) === "macho" ? "♂ Macho" : (passport?.gender || patient.gender) === "hembra" ? "♀ Hembra" : "—"}
-                    </span>
-                  </div>
-                )}
-                {passport?.weight && (
-                  <div>
-                    <span className="text-stone-400 block leading-none">Peso</span>
-                    <span className="font-semibold text-stone-800">{passport.weight}</span>
-                  </div>
-                )}
-                {passport?.color && (
-                  <div>
-                    <span className="text-stone-400 block leading-none">Color</span>
-                    <span className="font-semibold text-stone-800">{passport.color}</span>
-                  </div>
-                )}
-                {passport?.microchip && (
-                  <div className="col-span-2">
-                    <span className="text-stone-400 block leading-none">Microchip</span>
-                    <span className="font-mono text-stone-800">{passport.microchip}</span>
-                  </div>
-                )}
-              </div>
-            </div>
+            <PetEditableSection
+              patient={patient}
+              passport={passport}
+              onUpdatePassport={canEditField("clinical", "edit-pet") ? onUpdatePassport : null}
+            />
           </div>
 
           {/* === RESERVA === */}
@@ -32115,7 +41416,7 @@ function VetPatientCard({
           )}
 
           {/* === CONSULTA + TRATAMIENTO EN SEDE === */}
-          {/* Mismo bloque para ambos: insumos + factura activa. La diferencia es el botón final. */}
+          {/* Mismo bloque para ambos: insumos + recibo activa. La diferencia es el botón final. */}
           {(status === "consulta" || status === "tratamiento_sede") && (
             <>
               <div className="grid grid-cols-2 gap-2">
@@ -32146,7 +41447,7 @@ function VetPatientCard({
                     <Activity size={11} className="animate-pulse" /> Tratamiento en curso
                   </div>
                   <p className="text-xs">
-                    El paciente está hospitalizado. Sigue agregando insumos a la factura abierta hasta cerrar la atención.
+                    El paciente está hospitalizado. Sigue agregando insumos a la recibo abierta hasta cerrar la atención.
                   </p>
                 </div>
               )}
@@ -32202,7 +41503,7 @@ function VetPatientCard({
                 </div>
               </div>
 
-              {/* Factura activa (en tratamiento_sede ya existe) */}
+              {/* Recibo activa (en tratamiento_sede ya existe) */}
               {invoice && (
                 <button
                   onClick={onGoToSales}
@@ -32210,7 +41511,7 @@ function VetPatientCard({
                 >
                   <div className="min-w-0">
                     <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold flex items-center gap-1">
-                      <Receipt size={11} /> Factura activa
+                      <Receipt size={11} /> Recibo activa
                     </div>
                     <div className="font-mono text-xs font-bold text-stone-700">{invoice.number}</div>
                   </div>
@@ -32228,7 +41529,7 @@ function VetPatientCard({
                   onClick={() => setShowConfirmConsult(true)}
                   className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-semibold bg-stone-900 hover:bg-stone-800 text-white shadow transition"
                 >
-                  <CheckCircle size={15} strokeWidth={2.2} /> Confirmar consulta y abrir factura
+                  <CheckCircle size={15} strokeWidth={2.2} /> Confirmar consulta y abrir recibo
                 </button>
               )}
 
@@ -32237,7 +41538,7 @@ function VetPatientCard({
                   onClick={closeTreatment}
                   className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-semibold bg-stone-900 hover:bg-stone-800 text-white shadow transition"
                 >
-                  <CheckCircle size={15} strokeWidth={2.2} /> Cerrar atención · Finalizar factura
+                  <CheckCircle size={15} strokeWidth={2.2} /> Cerrar atención · Finalizar recibo
                 </button>
               )}
             </>
@@ -32293,7 +41594,7 @@ function VetPatientCard({
                 >
                   <div className="min-w-0">
                     <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold flex items-center gap-1">
-                      <Receipt size={11} /> Factura asociada
+                      <Receipt size={11} /> Recibo asociada
                     </div>
                     <div className="font-mono text-xs font-bold text-stone-700">{invoice.number}</div>
                   </div>
@@ -32377,6 +41678,23 @@ function VetPatientCard({
           onClose={() => setShowHistoryViewer(false)}
         />
       )}
+
+      {/* === Modales de adjuntos del chat de la ficha === */}
+      {showChatImagePicker && (
+        <ChatImagePickerModal
+          onClose={() => setShowChatImagePicker(false)}
+          onSend={handleChatSendImage}
+        />
+      )}
+      {showChatInvoicePicker && tutorClient && canSendInvoice && (
+        <ChatInvoicePickerModal
+          invoices={invoices}
+          activeClientId={tutorClient.id}
+          clients={clients}
+          onClose={() => setShowChatInvoicePicker(false)}
+          onSend={handleChatSendInvoice}
+        />
+      )}
     </>
   );
 }
@@ -32400,14 +41718,14 @@ function VetConfirmConsultModal({ patient, supplies, onClose, onConfirm }) {
         </div>
         <div className="p-5 space-y-3">
           <p className="text-sm text-stone-700">
-            Se abrirá una factura para <strong>{patient.owner}</strong>
+            Se abrirá una recibo para <strong>{patient.owner}</strong>
             {itemsCount > 0
               ? ` con la consulta + ${itemsCount} ${itemsCount === 1 ? "insumo" : "insumos"} usados.`
               : " con la consulta veterinaria base."}
           </p>
           <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 text-xs text-orange-900 flex items-start gap-2">
             <Receipt size={11} className="text-orange-700 flex-shrink-0 mt-0.5" />
-            <span>La factura quedará en estado <strong>borrador</strong>. Ventas la emitirá y cobrará desde el módulo de facturación.</span>
+            <span>La recibo quedará en estado <strong>borrador</strong>. Ventas la emitirá y cobrará desde el módulo de recibos.</span>
           </div>
 
           <div className="text-sm font-semibold text-stone-800 pt-1">
@@ -32424,7 +41742,7 @@ function VetConfirmConsultModal({ patient, supplies, onClose, onConfirm }) {
               <div className="flex-1 min-w-0">
                 <div className="font-semibold text-sm text-amber-900">Sí, queda hospitalizado</div>
                 <div className="text-xs text-amber-800 mt-0.5">
-                  Pasa a <strong>Tratamiento en sede</strong>. La factura sigue abierta para añadir más insumos.
+                  Pasa a <strong>Tratamiento en sede</strong>. La recibo sigue abierta para añadir más insumos.
                 </div>
               </div>
             </button>
@@ -32438,7 +41756,7 @@ function VetConfirmConsultModal({ patient, supplies, onClose, onConfirm }) {
               <div className="flex-1 min-w-0">
                 <div className="font-semibold text-sm text-stone-800">No, se va a casa</div>
                 <div className="text-xs text-stone-600 mt-0.5">
-                  Pasa directo a <strong>Finalizado</strong>. La factura queda lista para cobrar.
+                  Pasa directo a <strong>Finalizado</strong>. La recibo queda lista para cobrar.
                 </div>
               </div>
             </button>
@@ -32553,21 +41871,113 @@ function ChatImagePickerModal({ onClose, onSend }) {
   );
 }
 
-// ========== Modal: seleccionar factura para enviar al chat ==========
-// Importante: lista TODAS las facturas del sistema, no solo del cliente actual.
-// El veterinario puede compartir la factura de cualquier cliente con cualquier otro chat
-// (caso real: cliente pide ver factura de su socio comercial, etc.)
-function ChatInvoicePickerModal({ invoices, activeClientId, onClose, onSend }) {
+// ========== Modal: seleccionar recibo para enviar al chat ==========
+// Importante: lista TODAS las recibos del sistema, no solo del cliente actual.
+// El veterinario puede compartir la recibo de cualquier cliente con cualquier otro chat
+// (caso real: cliente pide ver recibo de su socio comercial, etc.)
+// ========== MODAL: ENVIAR MÉTODO DE PAGO AL CLIENTE POR CHAT ==========
+// Muestra los métodos de pago activos como botones grandes con icono.
+// Al hacer click envía los datos (banco, cuenta, wallet, etc.) como mensaje
+// formateado al cliente.
+function ChatPaymentMethodPickerModal({ paymentMethods = [], onClose, onSend }) {
+  const ICON_MAP = {
+    Banknote, CreditCard, ArrowRightLeft, Smartphone, Wallet, Coins,
+  };
+  const enabled = (paymentMethods || []).filter(m => m.enabled);
+
+  return (
+    <div onClick={onClose} className="fixed inset-0 bg-stone-900/80 z-50 flex justify-center items-center p-4">
+      <div onClick={(e) => e.stopPropagation()} className="bg-stone-50 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
+        <div className="p-4 border-b border-stone-200 bg-gradient-to-br from-emerald-50 to-white flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white grid place-items-center flex-shrink-0">
+            <Wallet size={16} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs tracking-widest uppercase text-emerald-700 font-bold">Enviar al cliente</div>
+            <h3 className="font-serif text-lg font-semibold mt-0.5">Método de pago</h3>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-lg bg-white hover:bg-stone-100 grid place-items-center text-stone-500 flex-shrink-0">
+            <X size={14} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {enabled.length === 0 ? (
+            <div className="text-center py-8 text-stone-400 text-sm">
+              <Wallet size={28} className="mx-auto mb-2 text-stone-300" />
+              <div className="font-semibold mb-1">Sin métodos activos</div>
+              <div className="text-xs">El admin debe activar al menos un método en Ajustes → Métodos de pago.</div>
+            </div>
+          ) : (
+            <>
+              <p className="text-xs text-stone-500 mb-3 leading-relaxed">
+                Selecciona el método cuyos datos quieres enviar al cliente. El mensaje se enviará por el canal activo.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {enabled.map(m => {
+                  const Ic = ICON_MAP[m.iconName] || Wallet;
+                  const rows = renderPaymentMethodDetails(m);
+                  const hasData = m.id === "efectivo" || (rows && rows.length > 0);
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={() => onSend(m)}
+                      disabled={!hasData}
+                      title={hasData ? `Enviar datos de ${m.label}` : "Sin datos configurados. Avisa al admin."}
+                      className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition ${
+                        hasData
+                          ? "bg-white border-stone-200 hover:border-emerald-500 hover:bg-emerald-50 hover:shadow-md"
+                          : "bg-stone-100 border-stone-200 opacity-50 cursor-not-allowed"
+                      }`}
+                    >
+                      <div className={`w-12 h-12 rounded-xl grid place-items-center ${
+                        hasData ? "bg-stone-900 text-white" : "bg-stone-300 text-stone-500"
+                      }`}>
+                        <Ic size={20} strokeWidth={1.8} />
+                      </div>
+                      <span className={`text-xs font-semibold text-center ${hasData ? "text-stone-800" : "text-stone-500"}`}>
+                        {m.label}
+                      </span>
+                      {!hasData && (
+                        <span className="text-[9px] text-amber-700 italic">Sin datos</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChatInvoicePickerModal({ invoices, activeClientId, clients = [], onClose, onSend }) {
+  // El modal ahora tiene 2 pasos:
+  // 1) "pick" — selección de recibo (lista filtrada con búsqueda)
+  // 2) "preview" — vista de la recibo como documento + mensaje editable que la acompaña
+  // Esto reemplaza el envío directo al hacer click en una recibo. El usuario revisa
+  // la recibo formateada (como la verá el cliente) y opcionalmente edita el mensaje.
+  const [step, setStep] = useState("pick");
+  const [selectedInvoice, setSelectedInvoice] = useState(null);
+  const [messageText, setMessageText] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("client"); // client | all
 
+  // Plantillas rápidas para el mensaje que acompaña la recibo
+  const messageTemplates = [
+    { id: "send", label: "Envío de recibo", text: "Hola! Te adjunto la recibo por nuestros servicios. Cualquier consulta quedo a tu disposición." },
+    { id: "reminder", label: "Recordatorio de pago", text: "Hola! Te recuerdo que tienes pendiente esta recibo. ¿Podrías coordinar el pago?" },
+    { id: "thanks", label: "Agradecimiento", text: "¡Gracias por tu pago! Te confirmo recepción y adjunto la recibo para tu registro." },
+    { id: "blank", label: "Sin mensaje", text: "" },
+  ];
+
   const filtered = useMemo(() => {
     let list = invoices;
-    // Filtro por cliente
     if (filter === "client") {
       list = list.filter(i => i.clientId === activeClientId);
     }
-    // Búsqueda
     if (search.trim()) {
       const q = search.toLowerCase();
       list = list.filter(i =>
@@ -32575,94 +41985,311 @@ function ChatInvoicePickerModal({ invoices, activeClientId, onClose, onSend }) {
         (i.clientName || "").toLowerCase().includes(q)
       );
     }
-    // Más recientes primero
     return [...list].sort((a, b) => (b.issueDate || "").localeCompare(a.issueDate || ""));
   }, [invoices, search, filter, activeClientId]);
 
   const clientInvoiceCount = invoices.filter(i => i.clientId === activeClientId).length;
 
+  // Al elegir una recibo, pasamos al preview con un mensaje por defecto.
+  const handlePickInvoice = (inv) => {
+    setSelectedInvoice(inv);
+    // Por defecto: si está emitida, mensaje de envío; si vencida, mensaje de recordatorio.
+    const defaultTemplate = inv.state === "vencido" || inv.balance > 0
+      ? messageTemplates.find(t => t.id === "reminder")
+      : messageTemplates.find(t => t.id === "send");
+    setMessageText(defaultTemplate?.text || "");
+    setStep("preview");
+  };
+
+  const handleConfirmSend = () => {
+    onSend(selectedInvoice, messageText.trim() || null);
+  };
+
   return (
-    <div onClick={onClose} className="fixed inset-0 bg-stone-900 z-50 flex justify-center items-center p-4">
-      <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-screen">
+    <div onClick={onClose} className="fixed inset-0 bg-stone-900/80 z-50 flex justify-center items-center p-4">
+      <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "90vh" }}>
+        {/* === HEADER === */}
         <div className="p-4 border-b border-stone-200 bg-orange-50 flex items-center gap-3 flex-shrink-0">
+          {step === "preview" && (
+            <button
+              onClick={() => { setStep("pick"); setSelectedInvoice(null); }}
+              title="Volver a la lista"
+              className="w-9 h-9 rounded-lg bg-white hover:bg-stone-100 border border-stone-200 grid place-items-center text-stone-600"
+            >
+              <ChevronLeft size={14} />
+            </button>
+          )}
           <div className="w-10 h-10 rounded-xl bg-orange-500 text-white grid place-items-center shadow-lg flex-shrink-0">
             <Receipt size={17} />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold">Compartir al chat</div>
-            <h3 className="font-serif text-lg font-semibold mt-0.5">Seleccionar factura</h3>
-          </div>
-        </div>
-
-        {/* Filtros */}
-        <div className="p-3 border-b border-stone-200 space-y-2 flex-shrink-0">
-          <div className="flex gap-1 bg-stone-100 rounded-lg p-0.5">
-            <button
-              onClick={() => setFilter("client")}
-              className={`flex-1 px-3 py-1.5 rounded text-xs font-semibold transition ${
-                filter === "client" ? "bg-white text-stone-900 shadow" : "text-stone-600 hover:text-stone-900"
-              }`}
-            >
-              De este cliente ({clientInvoiceCount})
-            </button>
-            <button
-              onClick={() => setFilter("all")}
-              className={`flex-1 px-3 py-1.5 rounded text-xs font-semibold transition ${
-                filter === "all" ? "bg-white text-stone-900 shadow" : "text-stone-600 hover:text-stone-900"
-              }`}
-            >
-              Todas ({invoices.length})
-            </button>
-          </div>
-          <div className="relative">
-            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
-            <input
-              autoFocus
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar por número o cliente..."
-              className="w-full pl-9 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-orange-500"
-            />
-          </div>
-        </div>
-
-        {/* Lista */}
-        <div className="flex-1 overflow-y-auto">
-          {filtered.length === 0 ? (
-            <div className="p-8 text-center text-sm text-stone-500">
-              {filter === "client"
-                ? "Este cliente no tiene facturas. Cambia a \"Todas\" para buscar otra."
-                : "Sin coincidencias."}
+            <div className="text-xs tracking-widest uppercase text-orange-700 font-semibold">
+              {step === "pick" ? "Compartir al chat" : `Previsualización · ${selectedInvoice?.number}`}
             </div>
-          ) : (
-            filtered.map(inv => (
+            <h3 className="font-serif text-lg font-semibold mt-0.5">
+              {step === "pick" ? "Seleccionar recibo" : "Revisa antes de enviar"}
+            </h3>
+          </div>
+          <button onClick={onClose} className="w-9 h-9 rounded-lg bg-white hover:bg-stone-100 border border-stone-200 grid place-items-center text-stone-600">
+            <X size={14} />
+          </button>
+        </div>
+
+        {/* === PASO 1: SELECCIÓN === */}
+        {step === "pick" && (
+          <>
+            <div className="p-3 border-b border-stone-200 space-y-2 flex-shrink-0">
+              <div className="flex gap-1 bg-stone-100 rounded-lg p-0.5">
+                <button
+                  onClick={() => setFilter("client")}
+                  className={`flex-1 px-3 py-1.5 rounded text-xs font-semibold transition ${
+                    filter === "client" ? "bg-white text-stone-900 shadow" : "text-stone-600 hover:text-stone-900"
+                  }`}
+                >
+                  De este cliente ({clientInvoiceCount})
+                </button>
+                <button
+                  onClick={() => setFilter("all")}
+                  className={`flex-1 px-3 py-1.5 rounded text-xs font-semibold transition ${
+                    filter === "all" ? "bg-white text-stone-900 shadow" : "text-stone-600 hover:text-stone-900"
+                  }`}
+                >
+                  Todas ({invoices.length})
+                </button>
+              </div>
+              <div className="relative">
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+                <input
+                  autoFocus
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Buscar por número o cliente..."
+                  className="w-full pl-9 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm outline-none focus:border-orange-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+              {filtered.length === 0 ? (
+                <div className="p-8 text-center text-sm text-stone-500">
+                  {filter === "client"
+                    ? "Este cliente no tiene recibos. Cambia a \"Todas\" para buscar otra."
+                    : "Sin coincidencias."}
+                </div>
+              ) : (
+                filtered.map(inv => (
+                  <button
+                    key={inv.id}
+                    onClick={() => handlePickInvoice(inv)}
+                    className="w-full flex items-center gap-2.5 p-3 hover:bg-orange-50 border-b border-stone-100 last:border-0 text-left transition"
+                  >
+                    <div className="w-9 h-9 rounded-lg bg-orange-100 text-orange-700 grid place-items-center flex-shrink-0">
+                      <Receipt size={13} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-baseline gap-1.5 flex-wrap">
+                        <span className="font-mono text-sm font-bold text-stone-800">{inv.number}</span>
+                        <InvoiceStateBadge state={inv.state} />
+                      </div>
+                      <div className="text-xs text-stone-500 truncate">
+                        {inv.clientName} · {inv.issueDate}
+                      </div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className="font-serif text-sm font-bold text-orange-700">
+                        ${inv.total.toFixed(2)}
+                      </div>
+                    </div>
+                    <ChevronRight size={11} className="text-stone-400 flex-shrink-0" />
+                  </button>
+                ))
+              )}
+            </div>
+          </>
+        )}
+
+        {/* === PASO 2: PREVIEW + MENSAJE === */}
+        {step === "preview" && selectedInvoice && (
+          <>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-stone-50">
+              {/* Documento de recibo renderizado */}
+              <InvoiceDocumentPreview invoice={selectedInvoice} clients={clients} />
+
+              {/* Mensaje que acompaña la recibo */}
+              <div className="bg-white border border-stone-200 rounded-xl p-3 space-y-2">
+                <div className="text-[10px] tracking-widest uppercase text-stone-500 font-bold">
+                  Mensaje que acompañará la recibo
+                </div>
+                {/* Plantillas rápidas */}
+                <div className="flex flex-wrap gap-1">
+                  {messageTemplates.map(t => (
+                    <button
+                      key={t.id}
+                      onClick={() => setMessageText(t.text)}
+                      className="text-[11px] font-semibold px-2 py-1 rounded-md bg-stone-100 hover:bg-orange-100 hover:text-orange-700 text-stone-600 transition"
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  value={messageText}
+                  onChange={(e) => setMessageText(e.target.value)}
+                  placeholder="Escribe un mensaje opcional para acompañar la recibo..."
+                  rows={3}
+                  className="w-full px-3 py-2 border border-stone-200 rounded-lg text-sm outline-none focus:border-orange-500 resize-none"
+                />
+                <div className="text-[10px] text-stone-500 italic">
+                  La recibo se enviará como adjunto. El mensaje aparecerá arriba.
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 border-t border-stone-200 bg-white flex gap-2 flex-shrink-0">
               <button
-                key={inv.id}
-                onClick={() => onSend(inv)}
-                className="w-full flex items-center gap-2.5 p-3 hover:bg-orange-50 border-b border-stone-100 last:border-0 text-left transition"
+                onClick={() => { setStep("pick"); setSelectedInvoice(null); }}
+                className="px-4 py-2.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 text-sm font-semibold transition"
               >
-                <div className="w-9 h-9 rounded-lg bg-orange-100 text-orange-700 grid place-items-center flex-shrink-0">
-                  <Receipt size={13} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-baseline gap-1.5 flex-wrap">
-                    <span className="font-mono text-sm font-bold text-stone-800">{inv.number}</span>
-                    <InvoiceStateBadge state={inv.state} />
-                  </div>
-                  <div className="text-xs text-stone-500 truncate">
-                    {inv.clientName} · {inv.issueDate}
-                  </div>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <div className="font-serif text-sm font-bold text-orange-700">
-                    ${inv.total.toFixed(2)}
-                  </div>
-                </div>
-                <Send size={11} className="text-stone-400 flex-shrink-0" />
+                Cancelar
               </button>
-            ))
+              <button
+                onClick={handleConfirmSend}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition flex items-center justify-center gap-2"
+              >
+                <Send size={14} />
+                Enviar recibo
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ========== Vista preview de recibo como documento ==========
+// Renderiza la recibo en formato "papel/PDF" para mostrarla tanto en:
+// - El paso de preview antes de enviar
+// - Como adjunto dentro del chat (modo compacto/zoom)
+function InvoiceDocumentPreview({ invoice, clients = [], compact = false }) {
+  const client = clients.find(c => c.id === invoice.clientId);
+  const items = invoice.items || [];
+  // Recalcular subtotal si no viene, para que el preview sea consistente
+  const subtotal = invoice.subtotal != null ? invoice.subtotal : items.reduce((s, i) => s + (i.total || 0), 0);
+  const tax = invoice.tax != null ? invoice.tax : Math.round(subtotal * 0.16 * 100) / 100;
+  const total = invoice.total != null ? invoice.total : subtotal + tax;
+  const paid = invoice.paid || 0;
+  const balance = total - paid;
+
+  return (
+    <div className={`bg-white border border-stone-200 rounded-xl shadow-sm overflow-hidden ${compact ? "text-xs" : ""}`}>
+      {/* Cabecera tipo "documento": marca + número + estado */}
+      <div className="px-5 py-4 bg-gradient-to-br from-orange-50 to-amber-50 border-b border-orange-200 flex items-start justify-between gap-3">
+        <div>
+          <div className={`font-serif font-bold text-orange-900 ${compact ? "text-base" : "text-xl"}`}>CRICKET</div>
+          <div className="text-[10px] tracking-widest uppercase text-orange-700 font-semibold mt-0.5">
+            Recibo · Comprobante de pago
+          </div>
+        </div>
+        <div className="text-right">
+          <div className={`font-mono font-bold text-stone-900 ${compact ? "text-sm" : "text-base"}`}>
+            {invoice.number}
+          </div>
+          <div className="mt-1">
+            <InvoiceStateBadge state={invoice.state} />
+          </div>
+        </div>
+      </div>
+
+      {/* Cuerpo: datos de cliente, fechas, items, totales */}
+      <div className={`${compact ? "p-3" : "p-5"} space-y-3`}>
+        {/* Cliente + fechas */}
+        <div className={`grid grid-cols-2 gap-3 ${compact ? "text-[11px]" : "text-xs"}`}>
+          <div>
+            <div className="text-[9px] tracking-widest uppercase text-stone-500 font-bold">Cliente</div>
+            <div className="font-semibold text-stone-800 mt-0.5">
+              {client?.name || invoice.clientName || "Sin nombre"}
+            </div>
+            {client?.cedula && (
+              <div className="text-stone-500 mt-0.5">{client.cedula}</div>
+            )}
+          </div>
+          <div className="text-right">
+            <div className="text-[9px] tracking-widest uppercase text-stone-500 font-bold">Emitida</div>
+            <div className="font-semibold text-stone-800 mt-0.5">{invoice.issueDate || "—"}</div>
+            {invoice.dueDate && (
+              <div className="text-stone-500 mt-0.5">Vence: {invoice.dueDate}</div>
+            )}
+          </div>
+        </div>
+
+        {/* Línea separadora */}
+        <div className="border-t border-dashed border-stone-300"></div>
+
+        {/* Items */}
+        <div className="space-y-1">
+          <div className={`text-[9px] tracking-widest uppercase text-stone-500 font-bold ${compact ? "text-[8px]" : ""}`}>
+            Detalle ({items.length} {items.length === 1 ? "ítem" : "ítems"})
+          </div>
+          <div className={`space-y-1 ${compact ? "text-[11px]" : "text-xs"}`}>
+            {items.length === 0 ? (
+              <div className="text-stone-400 italic py-2">Sin ítems en esta recibo.</div>
+            ) : items.map((item, idx) => (
+              <div key={idx} className="flex justify-between gap-2 py-1 border-b border-stone-100 last:border-0">
+                <div className="flex-1 min-w-0">
+                  <div className="text-stone-800 truncate">{item.description}</div>
+                  {item.qty > 1 && (
+                    <div className="text-stone-500 text-[10px]">{item.qty} × ${(item.unit || 0).toFixed(2)}</div>
+                  )}
+                </div>
+                <div className="font-mono font-semibold text-stone-900 flex-shrink-0">
+                  ${(item.total || 0).toFixed(2)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Totales */}
+        <div className="border-t border-dashed border-stone-300 pt-2 space-y-0.5">
+          <div className={`flex justify-between ${compact ? "text-[11px]" : "text-xs"} text-stone-600`}>
+            <span>Subtotal</span>
+            <span className="font-mono">${subtotal.toFixed(2)}</span>
+          </div>
+          <div className={`flex justify-between ${compact ? "text-[11px]" : "text-xs"} text-stone-600`}>
+            <span>IVA 16%</span>
+            <span className="font-mono">${tax.toFixed(2)}</span>
+          </div>
+          <div className={`flex justify-between font-bold text-orange-700 pt-1 border-t border-stone-200 ${compact ? "text-sm" : "text-base"}`}>
+            <span>Total</span>
+            <span className="font-mono">${total.toFixed(2)}</span>
+          </div>
+          {paid > 0 && (
+            <>
+              <div className={`flex justify-between text-emerald-700 ${compact ? "text-[11px]" : "text-xs"} pt-1`}>
+                <span>Abonado</span>
+                <span className="font-mono">−${paid.toFixed(2)}</span>
+              </div>
+              {balance > 0.01 && (
+                <div className={`flex justify-between font-bold text-red-700 ${compact ? "text-[11px]" : "text-xs"}`}>
+                  <span>Saldo pendiente</span>
+                  <span className="font-mono">${balance.toFixed(2)}</span>
+                </div>
+              )}
+              {balance <= 0.01 && (
+                <div className={`flex justify-between font-bold text-emerald-700 ${compact ? "text-[11px]" : "text-xs"}`}>
+                  <span>Estado</span>
+                  <span>✓ Pagado</span>
+                </div>
+              )}
+            </>
           )}
         </div>
+      </div>
+
+      {/* Footer del documento */}
+      <div className="px-5 py-2 bg-stone-50 border-t border-stone-200 text-center text-[10px] text-stone-400 italic">
+        Cricket — Gracias por confiar en nosotros.
       </div>
     </div>
   );
@@ -32846,6 +42473,7 @@ function ChatLinkClientModal({ existingClients, chatPhone, onClose, onLink }) {
                       { id: "rabbit", label: "Conejo", Icon: Rabbit },
                       { id: "rat", label: "Roedor", Icon: Rat },
                       { id: "fish", label: "Pez", Icon: Fish },
+                      { id: "other", label: "Otros", Icon: PawPrint },
                     ].map(opt => {
                       const Ic = opt.Icon;
                       const active = draft.pet.species === opt.id;
@@ -32981,6 +42609,12 @@ function ClinicalNotesEditor({ patientName, notes = {}, onChangeField }) {
       rows: 2,
     },
     {
+      id: "fotos",
+      label: "Fotos clínicas",
+      icon: Camera,
+      type: "photos",
+    },
+    {
       id: "diagnostico",
       label: "Diagnóstico",
       icon: BadgeCheck,
@@ -32993,6 +42627,12 @@ function ClinicalNotesEditor({ patientName, notes = {}, onChangeField }) {
       icon: Pill,
       placeholder: "Plan terapéutico, medicación prescrita, indicaciones para el tutor.",
       rows: 3,
+    },
+    {
+      id: "recetas",
+      label: "Recipe / Receta médica",
+      icon: FileText,
+      type: "recipe",
     },
     {
       id: "fechaControl",
@@ -33010,8 +42650,78 @@ function ClinicalNotesEditor({ patientName, notes = {}, onChangeField }) {
     setOpenSlots(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
+  // Helpers para fotos (guardadas como JSON array de base64 en notes.fotos)
+  const photos = useMemo(() => {
+    try { return JSON.parse(notes.fotos || "[]"); } catch { return []; }
+  }, [notes.fotos]);
+
+  const addPhoto = (e) => {
+    const files = e.target.files;
+    if (!files?.length) return;
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const current = (() => { try { return JSON.parse(notes.fotos || "[]"); } catch { return []; } })();
+        const newPhoto = {
+          id: `ph-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+          data: ev.target.result,
+          name: file.name,
+          date: new Date().toISOString(),
+          caption: "",
+        };
+        onChangeField("fotos", JSON.stringify([...current, newPhoto]));
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = "";
+  };
+
+  const removePhoto = (photoId) => {
+    const updated = photos.filter(p => p.id !== photoId);
+    onChangeField("fotos", JSON.stringify(updated));
+  };
+
+  const updatePhotoCaption = (photoId, caption) => {
+    const updated = photos.map(p => p.id === photoId ? { ...p, caption } : p);
+    onChangeField("fotos", JSON.stringify(updated));
+  };
+
+  // Helpers para recetas (guardadas como JSON array en notes.recetas)
+  const recipes = useMemo(() => {
+    try { return JSON.parse(notes.recetas || "[]"); } catch { return []; }
+  }, [notes.recetas]);
+
+  const addRecipe = () => {
+    const current = (() => { try { return JSON.parse(notes.recetas || "[]"); } catch { return []; } })();
+    const newRecipe = {
+      id: `rx-${Date.now().toString(36)}`,
+      medication: "",
+      dose: "",
+      frequency: "",
+      duration: "",
+      route: "",
+      instructions: "",
+    };
+    onChangeField("recetas", JSON.stringify([...current, newRecipe]));
+  };
+
+  const updateRecipe = (recipeId, field, value) => {
+    const updated = recipes.map(r => r.id === recipeId ? { ...r, [field]: value } : r);
+    onChangeField("recetas", JSON.stringify(updated));
+  };
+
+  const removeRecipe = (recipeId) => {
+    const updated = recipes.filter(r => r.id !== recipeId);
+    onChangeField("recetas", JSON.stringify(updated));
+  };
+
   // Stats: cuántos slots están llenos
-  const filledCount = SLOTS.filter(s => (notes[s.id] || "").trim()).length;
+  const slotHasContent = (slot) => {
+    if (slot.type === "photos") return photos.length > 0;
+    if (slot.type === "recipe") return recipes.length > 0;
+    return (notes[slot.id] || "").trim().length > 0;
+  };
+  const filledCount = SLOTS.filter(slotHasContent).length;
 
   return (
     <div className="bg-white border border-stone-200 rounded-xl overflow-hidden">
@@ -33041,8 +42751,13 @@ function ClinicalNotesEditor({ patientName, notes = {}, onChangeField }) {
         {SLOTS.map(slot => {
           const Ic = slot.icon;
           const isOpen = !!openSlots[slot.id];
+          const hasContent = slotHasContent(slot);
           const value = notes[slot.id] || "";
-          const hasContent = value.trim().length > 0;
+          const countLabel = slot.type === "photos"
+            ? (photos.length > 0 ? `${photos.length} foto${photos.length !== 1 ? "s" : ""}` : null)
+            : slot.type === "recipe"
+              ? (recipes.length > 0 ? `${recipes.length} receta${recipes.length !== 1 ? "s" : ""}` : null)
+              : (hasContent ? value : null);
 
           return (
             <div key={slot.id}>
@@ -33059,7 +42774,7 @@ function ClinicalNotesEditor({ patientName, notes = {}, onChangeField }) {
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold text-stone-800 truncate">{slot.label}</div>
                   {!isOpen && hasContent && (
-                    <div className="text-xs text-stone-500 truncate">{value}</div>
+                    <div className="text-xs text-stone-500 truncate">{countLabel}</div>
                   )}
                   {!isOpen && !hasContent && (
                     <div className="text-xs text-stone-400 italic">Sin completar</div>
@@ -33071,8 +42786,86 @@ function ClinicalNotesEditor({ patientName, notes = {}, onChangeField }) {
                 <ChevronDown size={13} className={`text-stone-400 flex-shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`} />
               </button>
 
-              {/* Body del slot — textarea cuando está abierto */}
-              {isOpen && (
+              {/* Body del slot */}
+              {isOpen && slot.type === "photos" && (
+                <div className="px-2.5 pb-2.5 space-y-2">
+                  {/* Grid de fotos */}
+                  {photos.length > 0 && (
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {photos.map(ph => (
+                        <div key={ph.id} className="relative group rounded-lg overflow-hidden border border-stone-200 bg-stone-50">
+                          <img src={ph.data} alt={ph.caption || ph.name} className="w-full h-20 object-cover" />
+                          <button
+                            onClick={() => removePhoto(ph.id)}
+                            className="absolute top-1 right-1 w-5 h-5 rounded-full bg-red-600 text-white grid place-items-center opacity-0 group-hover:opacity-100 transition"
+                          >
+                            <X size={9} />
+                          </button>
+                          <input
+                            type="text"
+                            value={ph.caption || ""}
+                            onChange={(e) => updatePhotoCaption(ph.id, e.target.value)}
+                            placeholder="Nota..."
+                            className="w-full px-1.5 py-1 text-[10px] border-t border-stone-200 outline-none bg-white placeholder:text-stone-300"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* Botón subir */}
+                  <label className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl border-2 border-dashed border-stone-200 hover:border-emerald-400 text-stone-500 hover:text-emerald-700 cursor-pointer transition text-xs font-semibold">
+                    <Camera size={13} /> Subir fotos clínicas
+                    <input type="file" accept="image/*" multiple onChange={addPhoto} className="hidden" />
+                  </label>
+                  <div className="text-[10px] text-stone-400 px-1">
+                    Fotos del paciente, lesiones, radiografías, ecografías. Se guardan en el historial.
+                  </div>
+                </div>
+              )}
+
+              {isOpen && slot.type === "recipe" && (
+                <div className="px-2.5 pb-2.5 space-y-2">
+                  {recipes.map((rx, idx) => (
+                    <div key={rx.id} className="bg-orange-50 border border-orange-200 rounded-xl p-2.5 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-orange-800">Receta #{idx + 1}</span>
+                        <button onClick={() => removeRecipe(rx.id)} className="text-stone-400 hover:text-red-500 transition">
+                          <X size={11} />
+                        </button>
+                      </div>
+                      <input
+                        type="text" value={rx.medication}
+                        onChange={(e) => updateRecipe(rx.id, "medication", e.target.value)}
+                        placeholder="Medicamento *"
+                        className="w-full px-2.5 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-orange-400 bg-white font-semibold"
+                      />
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <input type="text" value={rx.dose} onChange={(e) => updateRecipe(rx.id, "dose", e.target.value)}
+                          placeholder="Dosis (ej: 500mg)" className="px-2.5 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-orange-400 bg-white" />
+                        <input type="text" value={rx.route} onChange={(e) => updateRecipe(rx.id, "route", e.target.value)}
+                          placeholder="Vía (oral, IM, IV)" className="px-2.5 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-orange-400 bg-white" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <input type="text" value={rx.frequency} onChange={(e) => updateRecipe(rx.id, "frequency", e.target.value)}
+                          placeholder="Frecuencia (c/8h)" className="px-2.5 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-orange-400 bg-white" />
+                        <input type="text" value={rx.duration} onChange={(e) => updateRecipe(rx.id, "duration", e.target.value)}
+                          placeholder="Duración (7 días)" className="px-2.5 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-orange-400 bg-white" />
+                      </div>
+                      <textarea value={rx.instructions} onChange={(e) => updateRecipe(rx.id, "instructions", e.target.value)}
+                        placeholder="Indicaciones especiales para el tutor..." rows={2}
+                        className="w-full px-2.5 py-1.5 border border-stone-200 rounded-lg text-xs outline-none focus:border-orange-400 bg-white resize-none" />
+                    </div>
+                  ))}
+                  <button
+                    onClick={addRecipe}
+                    className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl border-2 border-dashed border-orange-200 hover:border-orange-400 text-orange-600 hover:text-orange-700 transition text-xs font-semibold"
+                  >
+                    <Plus size={12} /> Agregar receta
+                  </button>
+                </div>
+              )}
+
+              {isOpen && !slot.type && (
                 <div className="px-2.5 pb-2.5">
                   <textarea
                     value={value}
@@ -33645,6 +43438,7 @@ function WalkInPassportWizard({ context, onClose, onSubmit }) {
   // Datos clínicos de la mascota (lo único que de verdad necesita el vet para arrancar)
   const [petName, setPetName]       = useState(prefilled.name || "");
   const [petSpecies, setPetSpecies] = useState(prefilled.species || "dog");
+  const [petSpeciesOther, setPetSpeciesOther] = useState(""); // Texto libre cuando species = "other"
   const [petBreed, setPetBreed]     = useState(prefilled.breed || "");
   const [petAge, setPetAge]         = useState(prefilled.age || "");
   const [petGender, setPetGender]   = useState("");
@@ -33659,17 +43453,20 @@ function WalkInPassportWizard({ context, onClose, onSubmit }) {
     { id: "rabbit", label: "Conejo",   Icon: Rabbit },
     { id: "fish",   label: "Pez",      Icon: Fish },
     { id: "rodent", label: "Roedor",   Icon: Rat },
+    { id: "other",  label: "Otros",    Icon: PawPrint },
   ];
 
   // Mínimo para pasar a consulta: nombre y especie de la mascota.
   // Si la cita no trajo nombre de tutor, también lo exigimos para que el pasaporte no quede huérfano.
-  const canSubmit = petName.trim() && petSpecies && (hasOwnerName || ownerName.trim());
+  // Si la especie es "other", también exigimos el texto que especifica cuál.
+  const canSubmit = petName.trim() && petSpecies && (petSpecies !== "other" || petSpeciesOther.trim()) && (hasOwnerName || ownerName.trim());
 
   const handleSubmit = () => {
     if (!canSubmit) return;
     onSubmit({
       name: petName.trim(),
       species: petSpecies,
+      speciesOther: petSpecies === "other" ? petSpeciesOther.trim() : "",
       breed: petBreed.trim(),
       age: petAge.trim(),
       gender: petGender,
@@ -33714,6 +43511,16 @@ function WalkInPassportWizard({ context, onClose, onSubmit }) {
             </div>
           )}
 
+          {/* Motivo de la cita (viene del evento de agenda) */}
+          {context?.reason && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-2.5">
+              <div className="text-[10px] tracking-widest uppercase text-blue-700 font-bold mb-1 flex items-center gap-1">
+                <Info size={11} /> Motivo de la cita
+              </div>
+              <div className="text-xs text-blue-900 leading-relaxed">{context.reason}</div>
+            </div>
+          )}
+
           {/* Mascota */}
           <div>
             <label className="text-xs tracking-widest uppercase text-stone-500 font-semibold block mb-1">
@@ -33750,6 +43557,15 @@ function WalkInPassportWizard({ context, onClose, onSubmit }) {
                 );
               })}
             </div>
+            {petSpecies === "other" && (
+              <input
+                value={petSpeciesOther}
+                onChange={(e) => setPetSpeciesOther(e.target.value)}
+                placeholder="Especifica la especie (ej: hurón, iguana, tortuga…)"
+                autoFocus
+                className="mt-2 w-full px-3 py-2 bg-white border border-orange-300 rounded-lg text-sm focus:outline-none focus:border-orange-500"
+              />
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-2">
