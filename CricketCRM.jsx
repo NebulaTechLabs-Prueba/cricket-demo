@@ -41380,7 +41380,7 @@ function VetPatientCard({
             <PetEditableSection
               patient={patient}
               passport={passport}
-              onUpdatePassport={canEditField("clinical", "edit-pet") ? onUpdatePassport : null}
+              onUpdatePassport={fieldLevel("clinical", "edit-pet") === "edit" ? onUpdatePassport : null}
             />
           </div>
 
